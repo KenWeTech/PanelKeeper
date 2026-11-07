@@ -68,6 +68,6 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
 
           outputs: >-
-            type=image,name=target,annotation-index.org.opencontainers.image.description=PanelKeeper is a self-hosted Manga Library Manager for organizing CBZ chapters, managing metadata and covers, automating imports, and maintaining manga collections with inventory, quality control, and recovery tools.
+            type=image,name=target,"annotation-index.org.opencontainers.image.description=PanelKeeper is a self-hosted Manga Library Manager for organizing CBZ chapters, managing metadata and covers, automating imports, and maintaining manga collections with inventory, quality control, and recovery tools."
 
           platforms: linux/amd64,linux/arm64
