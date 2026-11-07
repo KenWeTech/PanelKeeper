@@ -1,0 +1,23 @@
+services:
+  panelkeeper:
+    image: ghcr.io/kenwetech/panelkeeper:latest
+    container_name: panelkeeper
+    restart: unless-stopped
+    ports:
+      - "7001:7001"
+    env_file:
+      - .env
+    environment:
+      PORT: 7001
+      DB_PATH: /app/data/panelkeeper.db
+      QC_DB_PATH: /app/data/panelkeeper_qc.db
+      LOG_PATH: /app/data/manager_history.log
+      MANGA_SOURCE_ROOT: /downloads
+      MANGA_DESTINATION: /manga
+    volumes:
+      # PanelKeeper databases and application history
+      - ./data:/app/data
+      # Incoming manga/download source folder
+      - /path/to/your/downloads:/downloads
+      # Managed manga library
+      - /path/to/your/manga-library:/manga
