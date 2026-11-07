@@ -32,6 +32,12 @@ PanelKeeper works with files that already exist in your configured folders. It d
 
 PanelKeeper can run on Windows, macOS, or Linux. The Node.js process must run under an account that can access the configured folders. On Windows, mapped drives may not be visible to services or scheduled tasks running under a different account; a UNC path may be more reliable in that situation.
 
+**Kavita Users:** Add the following exclude pattern to your Kavita library settings to prevent Kavita from scanning PanelKeeper's recovery folder:
+
+```text
+**/.panelkeeper-recovery/*
+```
+
 ## Installation
 
 1. Download and extract the latest ⁠`PanelKeeper-vX.X.X.zip`⁠ archive from [GitHub Releases](https://github.com/KenWeTech/PanelKeeper/releases).
@@ -170,7 +176,7 @@ An HTTP success response means Home Assistant responded to the request; it does 
 
 ### Kavita
 
-Kavita connection settings are optional. When configured, PanelKeeper can use Kavita-related series metadata and Special naming conventions and support the available cover integration features. PanelKeeper does not replace Kavita as a reader or server.
+Kavita connection settings are optional. When configured, PanelKeeper can use Kavita-related series metadata and pull the main cover to support the available cover integration features. PanelKeeper does not replace Kavita as a reader or server.
 
 ## Data, backups, and security
 
