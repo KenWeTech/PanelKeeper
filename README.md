@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/KenWeTech/PanelKeeper/blob/main/logo.png?raw=true" alt="PanelKeeper Logo" width="200"/>
+</p>
+
 # PanelKeeper
 
 **PanelKeeper is a self-hosted Manga Library Manager.** It organizes CBZ collections, automates incoming chapter processing, and provides tools for metadata, covers, inventory, quality control, and recovery.
@@ -30,7 +34,7 @@ PanelKeeper can run on Windows, macOS, or Linux. The Node.js process must run un
 
 ## Installation
 
-1. Download or clone the project.
+1. Download and extract the latest ⁠`PanelKeeper-vX.X.X.zip`⁠ archive from [GitHub Releases](https://github.com/KenWeTech/PanelKeeper/releases).
 2. Open a terminal in the project directory.
 3. Install dependencies and start the server:
 
@@ -55,6 +59,63 @@ PanelKeeper can run on Windows, macOS, or Linux. The Node.js process must run un
 Saved database settings take precedence over the two initial folder environment variables. The source and destination settings are intentionally blank on a fresh installation so each installation can be configured for its own storage layout.
 
 This first public release creates the current `panelkeeper.db` and `panelkeeper_qc.db` schemas directly. It does not import or upgrade databases from private development builds. When using an existing development library, set `DB_PATH` and `QC_DB_PATH` to the current PanelKeeper database files before starting the server.
+
+## Docker Deployment
+
+This is the simplest way to get PanelKeeper running using Docker Compose.
+
+1. **Create a `docker-compose.yml` file:** Create a new file named `docker-compose.yml` and paste the following:
+
+   ```yaml
+   services:
+     panelkeeper:
+       image: ghcr.io/kenwetech/panelkeeper:latest
+       container_name: panelkeeper
+       restart: unless-stopped
+       ports:
+         - "7001:7001"
+       environment:
+         PORT: 7001
+         DB_PATH: /app/data/panelkeeper.db
+         QC_DB_PATH: /app/data/panelkeeper_qc.db
+         LOG_PATH: /app/data/manager_history.log
+         MANGA_SOURCE_ROOT: /downloads
+         MANGA_DESTINATION: /manga
+       volumes:
+         # PanelKeeper databases and application history
+         - ./data:/app/data
+         # Incoming manga/download source folder
+         - /path/to/your/downloads:/downloads
+         # Managed manga library
+         - /path/to/your/manga-library:/manga
+   ```
+
+   **Volume configuration:**
+   - `./data:/app/data` stores the application databases and history log persistently.
+   - `/path/to/downloads:/downloads` maps your host's manga download folder.
+   - `/path/to/manga:/manga` maps your host's manga library folder.
+
+   Replace `/path/to/downloads` and `/path/to/manga` with the actual paths on your host system. The container-side paths (`/downloads` and `/manga`) must match the corresponding values in your `.env` file if used.
+
+   **Important:** The manga paths are used to initialize a new database. Once these settings have been saved in PanelKeeper, the database settings take precedence over changes to the `.env` file. Update existing paths through PanelKeeper Settings.
+
+2. **Start the container:** Open a terminal in the directory containing your `docker-compose.yml` file and run:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Docker will download the image and start PanelKeeper. The `data` folder will be created alongside your Compose file to persist the databases and application history across container updates and recreations.
+
+3. **Access PanelKeeper:** Open your browser and navigate to:
+
+   `http://localhost:7001`
+
+   To access PanelKeeper from another device on your network, use the IP address of the machine running Docker:
+
+   `http://YOUR-SERVER-IP:7001`
+
+**Note:** Ensure the downloads and manga library folders have read/write permissions for the container. PanelKeeper needs access to both locations to process and organize manga files.
 
 ## First-time configuration
 
