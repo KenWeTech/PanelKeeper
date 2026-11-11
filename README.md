@@ -176,7 +176,7 @@ An HTTP success response means Home Assistant responded to the request; it does 
 
 ### Kavita
 
-Kavita connection settings are optional. When configured, PanelKeeper can use Kavita-related series metadata and pull the main cover to support the available cover integration features. PanelKeeper does not replace Kavita as a reader or server.
+Kavita connection settings are optional. When configured, PanelKeeper can use Kavita-related series metadata for comicinfo files and pull the main cover to support the available cover integration features. PanelKeeper does not replace Kavita as a reader or server.
 
 ## Data, backups, and security
 
