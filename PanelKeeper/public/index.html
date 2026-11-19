@@ -172,6 +172,17 @@
         .toggle-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); background: #101720; border-radius: 10px; }
         .toggle-row label { margin: 0; color: var(--text); }
         .toggle-row .field-help { margin-top: 4px; font-weight: 400; }
+        .auto-qc-panel { margin:0 0 14px; border:1px solid var(--border); border-radius:10px; background:#101720; overflow:hidden; }
+        .auto-qc-panel .auto-qc-master { border:0; border-radius:0; background:transparent; }
+        .auto-qc-details { border-top:1px solid var(--border); }
+        .auto-qc-details > summary { display:flex; align-items:center; gap:8px; cursor:pointer; padding:10px 12px; color:var(--accent); font-weight:700; list-style:none; }
+        .auto-qc-details > summary::-webkit-details-marker { display:none; }
+        .auto-qc-details > summary::after { content:""; width:7px; height:7px; margin-left:auto; border-right:2px solid currentColor; border-bottom:2px solid currentColor; transform:rotate(45deg); transition:transform .15s ease; }
+        .auto-qc-details[open] > summary::after { transform:rotate(225deg); }
+        .auto-qc-details > summary:hover { background:var(--panel-2); }
+        .auto-qc-details > summary:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+        .auto-qc-content { padding:12px; border-top:1px solid var(--border); }
+        .auto-qc-description { margin:0 0 12px; }
         .path-status { display: grid; gap: 8px; }
         .path-status-row { padding: 11px; border-radius: 8px; border: 1px solid var(--border); background: #0d121a; }
         .progress-track { height: 8px; border-radius: 999px; background: #273242; overflow: hidden; margin: 12px 0 6px; }
@@ -779,7 +790,7 @@
 
         <section id="attention" class="view">
             <div class="card">
-                <div class="section-title"><div><h2>Files Needing Attention</h2><p class="muted">Files that could not be processed safely appear here. Correct chapter details, retry processing, dismiss the review record, or delete the file when it is no longer needed.</p></div><button class="secondary small-button" onclick="loadIssues(0)">Refresh</button></div>
+                <div class="section-title"><div><h2>Files Needing Attention</h2><p class="muted">Files that could not be processed safely appear here. Correct chapter details, retry processing, dismiss the review record, or move the CBZ to Recovery. Permanent deletion is managed through Recovery, including its optional age-based expiration.</p></div><button class="secondary small-button" onclick="loadIssues(0)">Refresh</button></div>
                 <div class="queue-toolbar queue-toolbar-standard"><input id="issueSearch" type="search" placeholder="Search text or punctuation · # = one digit" autocomplete="off"><select id="issueSeriesFilter" aria-label="Filter Attention by series"><option value="">All series</option></select><select id="issuePageSize" aria-label="Attention rows per page"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></div>
                 <div class="queue-actions">
                     <label><input class="queue-check" type="checkbox" id="issueSelectPage" onchange="toggleIssuePage(this)"> Select this page</label>
@@ -787,7 +798,7 @@
                     <button class="good small-button" onclick="bulkApplyIssueChapterNames()">Apply Entered Names to Selected</button>
                     <button class="secondary small-button" onclick="bulkAttention('recheck')">Recheck Selected</button>
                     <button class="ghost small-button" onclick="bulkAttention('dismiss')">Dismiss Selected</button>
-                    <button class="danger small-button" onclick="bulkAttention('delete')">Delete Files Selected</button>
+                    <button class="danger small-button" onclick="bulkAttention('delete')">Move Selected to Recovery</button>
                     <span id="issueSelectionSummary" class="queue-count">0 selected</span>
                 </div>
                 <div id="issueFilterSummary" class="muted" style="margin:10px 0">Loading review items…</div>
@@ -798,7 +809,7 @@
 
         <section id="recovery" class="view">
             <div class="card">
-                <div class="section-title"><div><h2>Recovery</h2><p class="muted">Browse previous chapter versions and files removed during library maintenance. Restore an item to its library location or permanently delete it. The retention period is configured in Settings.</p></div><button class="secondary small-button" onclick="loadRecovery(0)">Refresh</button></div>
+                <div class="section-title"><div><h2>Recovery</h2><p class="muted">Browse previous chapter versions and files removed during library maintenance or from Attention. Restore downloads to their original source or chapters to the library. Restore items here, delete them permanently, or let the optional Recovery retention setting expire old backups after a pipeline run.</p></div><button class="secondary small-button" onclick="loadRecovery(0)">Refresh</button></div>
                 <div class="queue-toolbar queue-toolbar-standard"><input id="recoverySearch" type="search" placeholder="Search text or punctuation · # = one digit" autocomplete="off"><select id="recoverySeriesFilter" aria-label="Filter Recovery by series"><option value="">All series</option></select><select id="recoveryPageSize" aria-label="Recovery rows per page"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="250">250</option></select></div>
                 <div class="queue-actions">
                     <label><input class="queue-check" type="checkbox" id="recoverySelectPage" onchange="toggleRecoveryPage(this)"> Select this page</label>
@@ -827,7 +838,7 @@
                         <h3>Map the selected source</h3>
                         <div id="selectedSourceLabel" class="notice">Select a source folder on the left to begin.</div>
                         <div class="field"><label for="destSearch">Find an existing library series</label><input id="destSearch" type="search" autocomplete="off" placeholder="Filter 300+ library folders…"><label for="destSelect" style="margin-top:8px">Select matching library series</label><select id="destSelect" size="1"><option value="">-- Select an existing series --</option></select><div class="field-help">The list remains selectable; search simply narrows it. Similar translations and alternate release names stay visible until filtered.</div></div>
-                        <div class="field"><label for="newDestInput">Or create/use a new target folder name</label><input id="newDestInput" type="text" autocomplete="off" placeholder="Leave blank to use the selected library series"><div class="field-help">Use this field only when you want a custom folder name not already in the library.</div></div>
+                        <div class="field"><label for="newDestInput">Or create/use a new target folder name</label><div class="cover-import-row"><input id="newDestInput" type="text" autocomplete="off" placeholder="Leave blank to use the selected library series"><button class="secondary small-button" type="button" onclick="pullSourceTitleForMapping()" title="Copy the selected download folder title into the new series title">Pull Source Title</button></div><div class="field-help">Copies the selected source title into this field for a new series; edit it before saving if necessary. Does not overwrite your typing automatically.</div></div>
                         <div class="field"><label for="mappingVolumeMode">Volume handling for this manga</label><select id="mappingVolumeMode"><option value="">Keep existing setting (new manga defaults to Off)</option><option value="off">Off · chapters only</option><option value="volume-chapters">Volumes + Chapters · separate chapter numbers by volume</option><option value="volume-only">Whole Volumes · each CBZ represents a volume</option></select><div class="field-help">This setting affects only the selected destination manga. It is never global. Kavita-style markers such as Vol. 2, v2, Tome 2, S01, 卷2, 2巻, 권2, เล่ม 2, and Том 2 are recognized when enabled.</div></div>
                         <div class="field"><label for="mappingIgnoredTerms">Per-series ignored words / phrases</label><textarea id="mappingIgnoredTerms" rows="3" placeholder="eng-li&#10;translated by Example Team"></textarea><div id="mappingIgnoredTermsStatus" class="field-help" aria-live="polite">Choose a destination manga to load its saved per-series rules.</div><div class="field-help">Enter one word or phrase per line. These rules apply to this destination manga across all mapped source folders. They are never copied into the global list. PanelKeeper combines the lists only while processing or checking this manga. Matching is case-insensitive and uses complete words and phrases.</div></div>
                         <button onclick="saveMatch()" style="width:100%; padding:12px">Save Mapping</button>
@@ -872,9 +883,26 @@
         <section id="quality" class="view">
             <div class="card">
                 <div class="section-title"><div><h2>Quality Control</h2><p class="muted">Check manga folders for invalid CBZ archives, chapter naming problems, findings related to the saved ComicInfo policy, and duplicate chapter identities. Repair selected findings, route items that need review to the appropriate queue, or mark one or more selected findings as Not an Issue. Scans run in the background and do not block incoming chapter processing.</p></div><button id="scanQcButton" onclick="runScan()">Scan Library</button></div>
-                <div class="toggle-row" style="margin-bottom:13px">
-                    <input id="autoQcToggle" type="checkbox" onchange="toggleAutoQC()">
-                    <div><label for="autoQcToggle">Run automatic QC in the background</label><div class="field-help">Runs a low-priority full-library pass when the interval below is due. It never holds up incoming downloads or scheduled processing. Safe filename repairs and the selected ComicInfo policy are applied automatically when possible; failed policy changes and ambiguous chapter conflicts remain available for review.</div></div>
+                <div class="auto-qc-panel">
+                    <div class="toggle-row auto-qc-master">
+                        <input id="autoQcToggle" type="checkbox" onchange="toggleAutoQC()">
+                        <div><label for="autoQcToggle">Run Automatic QC during pipeline</label><div class="field-help">After processing new downloads, inspect those chapters and revisit existing unresolved QC findings. Apply only the actions enabled below. This does not start a full-library scan; the scheduled full QC in Settings only reports findings.</div></div>
+                    </div>
+                    <details id="autoQCConfiguration" class="auto-qc-details">
+                        <summary>Configure Automatic QC</summary>
+                        <div class="auto-qc-content">
+                            <p class="field-help auto-qc-description">Choose what the post-pipeline automatic QC pass may do. Each switch saves immediately. Manual <strong>Repair Selected Issues</strong>, incoming-download processing, and explicitly requested metadata/cover actions are unaffected. You can configure these options even while automatic QC is turned off.</p>
+                            <div class="settings-grid" style="gap:9px">
+                            <div class="toggle-row"><input id="autoQCRepairNames" type="checkbox" onchange="toggleAutoQcAction('autoQCRepairNames')"><div><label for="autoQCRepairNames">Rename chapter files</label><div class="field-help">Automatically normalize safe chapter filenames. Turning this off also prevents automatic Specials renames and duplicate-copy filename cleanup.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCOrganizeSpecials" type="checkbox" onchange="toggleAutoQcAction('autoQCOrganizeSpecials')"><div><label for="autoQCOrganizeSpecials">Organize Specials and SP## names</label><div class="field-help">Move and number Specials in the Kavita-compatible Specials folder. Requires automatic renaming above.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCApplyComicInfo" type="checkbox" onchange="toggleAutoQcAction('autoQCApplyComicInfo')"><div><label for="autoQCApplyComicInfo">Apply ComicInfo policies</label><div class="field-help">Apply the separately selected Leave alone / Update / Remove / Replace / Upgrade policy during the pipeline QC pass. Leave alone never changes metadata.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCResolveDuplicates" type="checkbox" onchange="toggleAutoQcAction('autoQCResolveDuplicates')"><div><label for="autoQCResolveDuplicates">Resolve duplicate chapters</label><div class="field-help">Move automatic duplicate losers into Recovery. If disabled, duplicate chapter candidates remain visible in QC without moving files.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCRouteToReview" type="checkbox" onchange="toggleAutoQcAction('autoQCRouteToReview')"><div><label for="autoQCRouteToReview">Route unresolved issues to review</label><div class="field-help">Send invalid archives, unparseable filenames, and collisions to Attention or Conflicts for review. Disabling keeps findings in QC.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCRouteUnsupportedImages" type="checkbox" onchange="toggleAutoQcAction('autoQCRouteUnsupportedImages')"><div><label for="autoQCRouteUnsupportedImages">Send unsupported image formats to Attention</label><div class="field-help">Optional (off by default). During pipeline automatic QC, queue CBZs containing recognized unsupported image types such as JPEG XL (.jxl), HEIC, BMP or TIFF for manual review. QC always detects these pages, even when routing is off. Files remain in place; no conversion occurs.</div></div></div>
+                            </div>
+                            <div id="autoQCActionStatus" class="field-help" role="status" aria-live="polite" style="margin-top:10px">Automatic QC actions will be loaded from saved settings.</div>
+                        </div>
+                    </details>
                 </div>
                 <div id="qcProgressWrap" style="display:block">
                     <div class="progress-track"><div id="qcProgressBar" class="progress-bar"></div></div>
@@ -891,6 +919,7 @@
                             <option value="has_xml">ComicInfo policy change required</option>
                             <option value="bad_archive">Invalid ZIP/CBZ</option>
                             <option value="unsupported_archive">Unsupported ZIP type</option>
+                            <option value="unsupported_image_format">Unsupported image format (JXL, etc.)</option>
                             <option value="duplicate_chapter">Duplicate chapter number</option>
                             <option value="special_needs_kavita_path">Special needs SP## number / Specials folder</option>
                             <option value="xml_cleanup_failed">ComicInfo policy change failed</option>
@@ -1049,7 +1078,7 @@
         <section id="comicinfo" class="view">
             <div class="card">
                 <div class="section-title"><div><h2>ComicInfo Metadata Policy</h2><p class="muted">Choose the library-wide default for handling ComicInfo.xml in incoming CBZ files, scheduled maintenance, and QC repairs.</p></div></div>
-                <div class="field comicinfo-policy-field"><label for="comicInfoPolicySelect">Saved ComicInfo policy</label><select id="comicInfoPolicySelect"><option value="leave">Leave Alone · keep existing metadata unchanged</option><option value="update">Update · synchronize series and chapter identity fields</option><option value="remove">Remove · delete ComicInfo.xml from each processed CBZ</option><option value="replace">Replace · write the saved template for each chapter</option><option value="upgrade">Upgrade · add missing fields and preserve existing metadata</option></select><div class="field-help"><strong>Leave alone</strong> keeps existing ComicInfo.xml files unchanged. It is useful when another application manages chapter metadata. <strong>Update</strong> synchronizes Series / SeriesSort and parsed chapter identity (Number, Title, Volume, and Special format), while preserving other metadata; it does not create a missing XML file. <strong>Remove</strong> deletes ComicInfo.xml from each CBZ that contains it. <strong>Replace</strong> writes the saved global or manga template, with chapter placeholders resolved for each file. <strong>Upgrade</strong> fills missing template fields without replacing existing values. Replace and Upgrade require a saved template. Saving this policy sets the default for future incoming files, scheduled metadata maintenance, and QC repairs; it does not immediately rewrite existing chapters. Use the manga-level Apply action below to run the currently selected policy on one manga. Library Manager renames continue to refresh chapter identity metadata as part of the rename operation.</div></div>
+                <div class="field comicinfo-policy-field"><label for="comicInfoPolicySelect">Saved ComicInfo policy</label><select id="comicInfoPolicySelect"><option value="leave">Leave alone · keep existing metadata unchanged</option><option value="update">Update · synchronize series and chapter identity fields</option><option value="remove">Remove · delete ComicInfo.xml from each processed CBZ</option><option value="replace">Replace · write the saved template for each chapter</option><option value="upgrade">Upgrade · add missing fields and preserve existing metadata</option></select><div class="field-help"><strong>Leave alone</strong> keeps existing ComicInfo.xml files unchanged. It is useful when another application manages chapter metadata. <strong>Update</strong> synchronizes Series / SeriesSort and parsed chapter identity (Number, Title, Volume, and Special format), while preserving other metadata; it does not create a missing XML file. <strong>Remove</strong> deletes ComicInfo.xml from each CBZ that contains it. <strong>Replace</strong> writes the saved global or manga template, with chapter placeholders resolved for each file. <strong>Upgrade</strong> fills missing template fields without replacing existing values. Replace and Upgrade require a saved template. Saving this policy sets the default for future incoming files, scheduled metadata maintenance, and QC repairs; it does not immediately rewrite existing chapters. Use the manga-level Apply action below to run the currently selected policy on one manga. Library Manager renames continue to refresh chapter identity metadata as part of the rename operation.</div></div>
                 <div class="toolbar"><button type="button" onclick="saveComicInfoPolicy()">Save ComicInfo Policy</button><span id="comicInfoPolicyStatus" class="muted" aria-live="polite"></span></div>
             </div>
 
@@ -1155,16 +1184,14 @@
                 <h2 style="margin-bottom:14px">Processing & Storage</h2>
                 <div class="settings-grid">
                     <div class="field"><label for="minimumFileAgeSeconds">Wait after a download changes (seconds)</label><input id="minimumFileAgeSeconds" type="number" min="0" max="3600" step="15"><div class="field-help">Avoids processing a CBZ while a downloader is still writing it. Set to 0 to disable the safety delay.</div></div>
-                    <div class="field"><label for="autoQCIntervalHours">Automatic full QC interval (hours)</label><input id="autoQCIntervalHours" type="number" min="1" max="720" step="1"><div class="field-help">Default: 168 hours (weekly). This keeps a 200,000+ file library from being fully rescanned after every pipeline run.</div></div>
-                    <div class="field"><label for="backupRetentionDays">Recovery retention (days)</label><input id="backupRetentionDays" type="number" min="1" max="365"><div class="field-help">Old versions stay recoverable for this many days, then are removed during a pipeline run.</div></div>
+                    <div class="field"><div class="toggle-row"><input id="automaticFullQCEnabled" type="checkbox"><div><label for="automaticFullQCEnabled">Enable Full QC library scanning</label><div class="field-help">Independent of the download pipeline. Full QC only scans and reports issues; it never repairs, renames, moves, or edits files. You can repair findings manually or mark them Not an Issue.</div></div></div></div>
+                    <div class="field"><label for="autoQCIntervalHours">Full QC scan interval (hours)</label><input id="autoQCIntervalHours" type="number" min="1" max="720" step="1"><div class="field-help">Default: 168 hours (weekly). This schedule is separate from the post-pipeline Automatic QC settings in the QC Scanner tab.</div></div>
+                    <div class="field"><div class="toggle-row"><input id="recoveryAutoExpire" type="checkbox" onchange="syncRecoveryRetentionControls()"><div><label for="recoveryAutoExpire">Automatically expire Recovery backups</label><div class="field-help">Enabled by default, as in previous releases. Eligible Recovery copies are permanently removed after a successful pipeline run. Turn this off to keep them until manually deleted or restored.</div></div></div></div>
+                    <div class="field"><label for="backupRetentionDays">Recovery retention (days)</label><input id="backupRetentionDays" type="number" min="1" max="365" step="1"><div class="field-help">Default: 14 days. Your previously saved number of days is preserved across upgrades. This limit is only used when automatic expiration is enabled.</div></div>
                     <div class="field"><label for="logRetention">Database log entries to keep</label><input id="logRetention" type="number" min="500" max="50000" step="500"><div class="field-help">Old log rows are pruned automatically.</div></div>
                     <div class="field"><label for="logFileMaxMB">Log file size limit (MB)</label><input id="logFileMaxMB" type="number" min="1" max="25" step="1"><div class="field-help">The text log rotates to one backup when it reaches this size.</div></div>
                 </div>
                 <div class="toolbar"><button onclick="saveProcessingSettings()">Save Processing Settings</button><span id="processingStatus" class="muted" aria-live="polite"></span></div>
-            </div>
-            <div class="card">
-                <h2>Windows network drive access</h2>
-                <p class="muted">Windows maps drive letters separately for each user session. When PanelKeeper runs as a service or scheduled task, a mapped drive may not be available. Run the server under the account that owns the mapping or use the matching network path (for example, <code>\\server\share\Mangas</code>).</p>
             </div>
         </section>
     </main>
@@ -1272,7 +1299,7 @@
             return `${remaining}s`;
         };
         const friendlyIssue = issue => ({
-            bad_name: 'Bad name', has_xml: 'ComicInfo policy change required', bad_archive: 'Invalid CBZ', unsupported_archive: 'Unsupported CBZ archive', xml_cleanup_failed: 'ComicInfo policy change failed',
+            bad_name: 'Bad name', has_xml: 'ComicInfo policy change required', bad_archive: 'Invalid CBZ', unsupported_archive: 'Unsupported CBZ archive', unsupported_image_format: 'Unsupported image pages', xml_cleanup_failed: 'ComicInfo policy change failed',
             unparsed_chapter: 'No safe chapter name', manual_chapter: 'Manual chapter correction', duplicate_chapter: 'Different files use the same chapter number', destination_access: 'Destination access',
             special_needs_kavita_path: 'Special needs SP## number / Specials folder', move_failed: 'Move failed'
         }[issue] || issue);
@@ -1717,7 +1744,7 @@
                             <div class="work-meta">Last checked ${escapeHTML(prettyTimestamp(item.updated_at))}${!item.exists ? ' · File no longer exists at this path' : ''}</div>
                             </div>
                         </div>
-                        <div class="work-actions"><button class="secondary small-button" ${!item.exists || !item.basename?.toLowerCase().endsWith('.cbz') ? 'disabled' : ''} onclick="openArchiveEditor('issue', ${item.id})">View / Edit Pages</button><button class="secondary small-button" onclick="recheckIssue(${item.id})">Recheck</button><button class="ghost small-button" onclick="ignoreIssue(${item.id})">Dismiss Record</button><button class="danger small-button" ${!item.exists ? 'disabled' : ''} onclick="deleteIssueFile(${item.id})">Delete File</button></div>
+                        <div class="work-actions"><button class="secondary small-button" ${!item.exists || !item.basename?.toLowerCase().endsWith('.cbz') ? 'disabled' : ''} onclick="openArchiveEditor('issue', ${item.id})">View / Edit Pages</button><button class="secondary small-button" onclick="recheckIssue(${item.id})">Recheck</button><button class="ghost small-button" onclick="ignoreIssue(${item.id})">Dismiss Record</button><button class="danger small-button" ${!item.exists ? 'disabled' : ''} onclick="deleteIssueFile(${item.id})">Move to Recovery</button></div>
                     </article>`).join('') : '<div class="empty">No files are waiting for attention. Unmatched folders remain available in Series Mapper until you map them.</div>';
                 $('issueSelectPage').checked = currentIssueRows.length > 0 && (issueAllFiltered || currentIssueRows.every(item => selectedIssueIds.has(item.id)));
                 $('issueAllFiltered').checked = issueAllFiltered;
@@ -1804,16 +1831,16 @@
             const descriptions = {
                 recheck: 'recheck the selected files and retry eligible processing',
                 dismiss: 'dismiss the selected records without changing their files',
-                delete: 'permanently delete the selected CBZ files from disk'
+                delete: 'move the selected CBZ files to Recovery for restoration or later deletion'
             };
-            if (!await confirmDialog(`This will ${descriptions[action]} for ${count.toLocaleString()} Attention item(s).${action === 'delete' ? ' This cannot be undone.' : ''} Continue?`, {
-                title: action === 'delete' ? 'Bulk delete manga files' : action === 'dismiss' ? 'Bulk dismiss Attention items' : 'Bulk recheck Attention items',
-                confirmText: action === 'delete' ? 'Delete Files' : action === 'dismiss' ? 'Dismiss Records' : 'Recheck Files',
+            if (!await confirmDialog(`This will ${descriptions[action]} for ${count.toLocaleString()} Attention item(s).${action === 'delete' ? ' They can be restored from Recovery.' : ''} Continue?`, {
+                title: action === 'delete' ? 'Bulk move to Recovery' : action === 'dismiss' ? 'Bulk dismiss Attention items' : 'Bulk recheck Attention items',
+                confirmText: action === 'delete' ? 'Move to Recovery' : action === 'dismiss' ? 'Dismiss Records' : 'Recheck Files',
                 danger: action === 'delete'
             })) return;
             const buttons = document.querySelectorAll('#attention .queue-actions button');
             buttons.forEach(button => button.disabled = true);
-            $('issueFilterSummary').textContent = `${action === 'delete' ? 'Deleting' : action === 'dismiss' ? 'Dismissing' : 'Rechecking'} ${count.toLocaleString()} Attention item(s)…`;
+            $('issueFilterSummary').textContent = `${action === 'delete' ? 'Moving to Recovery' : action === 'dismiss' ? 'Dismissing' : 'Rechecking'} ${count.toLocaleString()} Attention item(s)…`;
             try {
                 const result = await postJSON('/api/issues/bulk', { action, ids, allFiltered: issueAllFiltered, ...filters });
                 selectedIssueIds.clear();
@@ -1821,8 +1848,8 @@
                 $('issueAllFiltered').checked = false;
                 $('issueSelectPage').checked = false;
                 const failed = result.failed || [];
-                await notifyDialog(`Bulk ${action} finished: ${Number(result.completed || 0).toLocaleString()} completed, ${failed.length.toLocaleString()} failed.${failed.length ? `\nFirst failure: #${failed[0].id} — ${failed[0].error}` : ''}`, 'Attention bulk action');
-                await Promise.all([loadIssueFilters(), loadIssues(queuePaging.issues.page), loadConflicts(), loadRecovery(), loadLogs(), updateHealth()]);
+                await notifyDialog(`Bulk ${action === 'delete' ? 'move to Recovery' : action} finished: ${Number(result.completed || 0).toLocaleString()} completed, ${failed.length.toLocaleString()} failed.${failed.length ? `\nFirst failure: #${failed[0].id} — ${failed[0].error}` : ''}`, 'Attention bulk action');
+                await Promise.all([loadIssueFilters(), loadIssues(queuePaging.issues.page), loadConflicts(), loadRecoveryFilters(), loadRecovery(0), loadLogs(), updateHealth()]);
             } catch (error) { await notifyDialog(`Bulk Attention action failed: ${error.message}`, 'Attention error'); }
             finally { buttons.forEach(button => button.disabled = false); }
         }
@@ -1866,7 +1893,7 @@
                                 ${item.exists === false ? '<div class="work-meta" style="color:var(--bad)">Recovery file is confirmed missing; you can remove this stale index record.</div>' : item.exists === null ? '<div class="work-meta" style="color:var(--warn)">Recovery storage is unavailable or unverified. Actions are disabled until the path is accessible.</div>' : ''}</div>
                         </div>
                         <div class="work-actions"><button class="secondary small-button" ${item.exists !== true ? 'disabled' : ''} onclick="openArchiveEditor('recovery', ${item.id})">View / Edit Pages</button><button class="good small-button" ${item.exists !== true ? 'disabled' : ''} onclick="restoreRecovery(${item.id})">Restore Previous Version</button><button class="danger small-button" ${item.exists === null ? 'disabled' : ''} onclick="deleteRecovery(${item.id})">Delete Permanently</button></div>
-                    </article>`).join('') : '<div class="empty">Recovery is empty. Approved replacements and automatically removed duplicates are preserved here until you delete or restore them.</div>';
+                    </article>`).join('') : '<div class="empty">Recovery is empty. Backups remain until restored, permanently deleted, or expired according to the configured retention policy.</div>';
                 $('recoverySelectPage').checked = currentRecoveryRows.some(item => item.exists !== null) && currentRecoveryRows.filter(item => item.exists !== null).every(item => selectedRecoveryIds.has(item.id));
                 $('recoverySelectionSummary').textContent = $('recoveryAllFiltered').checked
                     ? `${state.total.toLocaleString()} filtered Recovery item(s) selected`
@@ -1967,10 +1994,10 @@
             container.innerHTML = visible.length ? visible.map((page, index) => `
                 <article class="archive-page-card${page.managedCover ? ' managed-cover' : ''}" data-page-index="${index}" ${page.managedCover ? '' : 'draggable="true"'}>
                     <div class="archive-page-heading"><strong>Page ${index + 1}</strong>${page.managedCover ? '<span class="tag warn">Managed cover · pinned</span>' : `<span class="work-meta">${formatBytes(page.size)}</span>`}</div>
-                    <a class="archive-page-image-wrap" href="${archiveEditorImageUrl(page.entryIndex, state)}" target="_blank" rel="noopener" title="Open original full-size image in a new tab"><img class="archive-page-image" loading="lazy" decoding="async" src="${archiveEditorImageUrl(page.entryIndex, state)}" alt="${escapeHTML(page.name)}"></a>
-                    <div class="archive-page-name" title="${escapeHTML(page.name)}">${escapeHTML(page.name)}</div>
+                    ${page.previewable ? `<a class="archive-page-image-wrap" href="${archiveEditorImageUrl(page.entryIndex, state)}" target="_blank" rel="noopener" title="Open original full-size image in a new tab"><img class="archive-page-image" loading="lazy" decoding="async" src="${archiveEditorImageUrl(page.entryIndex, state)}" alt="${escapeHTML(page.name)}"></a>` : `<div class="compare-loading">Preview unavailable for ${escapeHTML((page.extension || '').toUpperCase())} page. The file is still inside the CBZ and can be removed below.</div>`}
+                    <div class="archive-page-name" title="${escapeHTML(page.name)}">${escapeHTML(page.name)}${page.unsupportedFormat ? ' <span class="tag bad">Unsupported format</span>' : ''}</div>
                     ${page.managedCover ? '<div class="archive-page-lock">This image is controlled by the Chapter Covers rule.</div>' : `<div class="archive-page-actions"><button class="secondary small-button" onclick="moveArchivePage(${index}, -1)" ${normalPages.indexOf(page) <= 0 || state.busy ? 'disabled' : ''} aria-label="Move page ${index + 1} up">↑ Up</button><button class="secondary small-button" onclick="moveArchivePage(${index}, 1)" ${normalPages.indexOf(page) === normalPages.length - 1 || state.busy ? 'disabled' : ''} aria-label="Move page ${index + 1} down">↓ Down</button><button class="danger small-button" onclick="deleteArchiveEditorPage(${index})" ${state.busy || state.dirty || normalPages.length <= 1 ? 'disabled' : ''}>Delete Page</button></div>`}
-                </article>`).join('') : '<div class="empty">No supported image pages were found in this CBZ.</div>';
+                </article>`).join('') : '<div class="empty">No recognized image pages were found in this CBZ.</div>';
             $('archiveEditorCount').textContent = `${state.pages.length.toLocaleString()} total images · ${normalPages.length.toLocaleString()} chapter pages${state.dirty ? ' · Page order has unsaved changes' : ' · Saved'}`;
             $('archiveEditorSave').disabled = !state.dirty || state.busy || normalPages.length < 2;
             $('archiveEditorSave').textContent = state.busy ? 'Saving…' : 'Save Page Order';
@@ -2070,7 +2097,7 @@
                 ? 'This removes the selected image only from this archived Recovery copy. It does not change a restored/current library chapter.'
                 : state.kind === 'library'
                     ? 'This removes the selected image from the live manga library chapter. PanelKeeper saves the original chapter to Recovery first, so you can restore the untouched original if needed.'
-                    : 'This permanently removes the selected image from the Attention CBZ. Make sure it is the page you intend to remove.';
+                    : 'This removes the selected image from the Attention CBZ, but the original untouched CBZ is saved to Recovery first.';
             if (!await confirmDialog(`Delete page “${page.name}”?\n\n${actionDescription}`, { title: 'Delete chapter page?', confirmText: 'Delete Page', danger: true })) return;
             state.busy = true;
             renderArchiveEditor();
@@ -2577,11 +2604,11 @@
             catch (error) { await notifyDialog(error.message, 'PanelKeeper error'); }
         }
         async function deleteIssueFile(id) {
-            if (!await confirmDialog('Permanently delete this actual CBZ file from disk? This is different from dismissing the record and cannot be undone.', { title: 'Delete manga file', confirmText: 'Delete File', danger: true })) return;
+            if (!await confirmDialog('Move this CBZ out of Downloads/Library into Recovery? You can restore or permanently delete it from Recovery.', { title: 'Move to Recovery', confirmText: 'Move to Recovery', danger: true })) return;
             try {
                 const result = await api(`/api/issues/${id}`, { method: 'DELETE' });
-                await notifyDialog(result.message || 'File deleted.', 'File deleted');
-                await Promise.all([loadIssues(), loadLogs(), updateHealth()]);
+                await notifyDialog(result.message || 'File moved to Recovery.', 'Moved to Recovery');
+                await Promise.all([loadIssues(), loadRecoveryFilters(), loadRecovery(0), loadLogs(), updateHealth()]);
             } catch (error) { await notifyDialog(error.message, 'PanelKeeper error'); }
         }
         async function restoreRecovery(id) {
@@ -2671,6 +2698,19 @@
             $('newDestInput').value = '';
             resetMappingIgnoreEditor();
             renderUnmatchedSources();
+        }
+
+        function pullSourceTitleForMapping() {
+            if (!selectedSource || !selectedSourcePath) {
+                notifyDialog('Choose an unmatched source folder first.', 'Series Mapper');
+                return;
+            }
+            $('newDestInput').value = selectedSource;
+            $('destSelect').value = '';
+
+            resetMappingIgnoreEditor();
+            loadMappingIgnoredTermsForTarget({ force: true }).catch(error => notifyDialog(error.message, 'Series Mapper'));
+            $('newDestInput').focus();
         }
 
         $('conflictSearch').addEventListener('input', () => {
@@ -3191,7 +3231,7 @@
                     <td>${escapeHTML(item.series)}</td>
                     <td><div><strong>From:</strong> ${escapeHTML(item.file)}</div><div class="work-meta path">${escapeHTML(item.path)}</div>${item.reason ? `<div class="work-meta">${escapeHTML(item.reason)}</div>` : ''}</td>
                     <td>${item.issues.includes('bad_name') || item.issues.includes('special_needs_kavita_path') ? (item.proposedName ? `<div><strong>To:</strong> ${escapeHTML(item.proposedName)}</div><div class="work-meta path">${escapeHTML(item.proposedPath || '')}</div>${item.renameCollision ? '<span class="tag bad">Target already exists · rename will not overwrite</span>' : '<span class="tag good">Rename target available</span>'}` : '<span class="tag warn">No safe chapter name could be derived</span>') : '<span class="muted">No rename proposed</span>'}</td>
-                    <td><div class="issue-tags">${item.issues.map(issue => `<span class="tag ${issue === 'bad_archive' ? 'bad' : issue === 'has_xml' ? 'warn' : ''}">${escapeHTML(friendlyIssue(issue))}</span>`).join('')}</div></td>
+                    <td><div class="issue-tags">${item.issues.map(issue => `<span class="tag ${['bad_archive', 'unsupported_image_format'].includes(issue) ? 'bad' : issue === 'has_xml' ? 'warn' : ''}">${escapeHTML(friendlyIssue(issue))}</span>`).join('')}</div></td>
                     <td><button class="secondary small-button" onclick="dismissQcIssue(${index})">Not an Issue</button></td>
                 </tr>`; }).join('') : '<tr><td colspan="6" class="muted">No quality issues found for this filter.</td></tr>';
                 $('qcSelectPage').checked = false;
@@ -3279,6 +3319,30 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             const checkbox = $('autoQcToggle');
             try { await postJSON('/api/settings', { key: 'autoQC', value: checkbox.checked }); }
             catch (error) { checkbox.checked = !checkbox.checked; await notifyDialog(`Could not save automatic QC: ${error.message}`, 'Automatic QC'); }
+        }
+
+        const automaticQcActionKeys = ['autoQCRepairNames', 'autoQCOrganizeSpecials', 'autoQCApplyComicInfo', 'autoQCResolveDuplicates', 'autoQCRouteToReview', 'autoQCRouteUnsupportedImages'];
+        function syncAutomaticQcActionControls() {
+            $('autoQCOrganizeSpecials').disabled = !$('autoQCRepairNames').checked;
+            $('autoQCActionStatus').textContent = $('autoQCRepairNames').checked
+                ? 'All switches save immediately. Automatic QC findings remain visible when an action is off.'
+                : 'Automatic filename changes are off, including Specials moves and duplicate-copy renames. Other enabled actions can still run.';
+        }
+        async function toggleAutoQcAction(key) {
+            if (!automaticQcActionKeys.includes(key)) return;
+            const checkbox = $(key);
+            const requested = checkbox.checked;
+            syncAutomaticQcActionControls();
+            $('autoQCActionStatus').textContent = 'Saving automatic QC action…';
+            try {
+                await postJSON('/api/settings', { key, value: requested });
+                syncAutomaticQcActionControls();
+            } catch (error) {
+                checkbox.checked = !requested;
+                syncAutomaticQcActionControls();
+                $('autoQCActionStatus').textContent = `Could not save: ${error.message}`;
+                await notifyDialog(`Could not save the automatic QC action: ${error.message}`, 'Automatic QC');
+            }
         }
 
         function matchesPatternText(value, query) {
@@ -4795,6 +4859,9 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                 status.textContent = `Could not save global ignore rules: ${error.message}`;
             }
         }
+        function syncRecoveryRetentionControls() {
+            $('backupRetentionDays').disabled = !$('recoveryAutoExpire').checked;
+        }
         async function loadSettings() {
             try {
                 const settings = await api('/api/settings');
@@ -4810,8 +4877,13 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                 $('schedulerTimezone').value = settings.schedulerTimezone || 'system';
                 if (settings.cronSchedule && !settings.scheduleValid) $('settingsStatus').textContent = 'Saved schedule is invalid. Choose a preset or enter a valid custom cron expression.';
                 $('autoQcToggle').checked = String(settings.autoQC ?? 'false') === 'true';
+                for (const key of automaticQcActionKeys) $(key).checked = String(settings[key] ?? (key === 'autoQCRouteUnsupportedImages' ? 'false' : 'true')) === 'true';
+                syncAutomaticQcActionControls();
                 $('autoQCIntervalHours').value = settings.autoQCIntervalHours || 168;
-                $('backupRetentionDays').value = settings.backupRetentionDays || 14;
+                $('automaticFullQCEnabled').checked = String(settings.automaticFullQCEnabled ?? 'false') === 'true';
+                $('recoveryAutoExpire').checked = String(settings.recoveryAutoExpire ?? 'true') === 'true';
+                $('backupRetentionDays').value = settings.backupRetentionDays ?? 14;
+                syncRecoveryRetentionControls();
                 $('minimumFileAgeSeconds').value = settings.minimumFileAgeSeconds ?? 120;
                 $('logRetention').value = settings.logRetention || 5000;
                 $('logFileMaxMB').value = settings.logFileMaxMB || 2;
@@ -4853,6 +4925,8 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
         async function saveProcessingSettings() {
             const values = {
                 autoQCIntervalHours: $('autoQCIntervalHours').value,
+                automaticFullQCEnabled: $('automaticFullQCEnabled').checked,
+                recoveryAutoExpire: $('recoveryAutoExpire').checked,
                 backupRetentionDays: $('backupRetentionDays').value,
                 minimumFileAgeSeconds: $('minimumFileAgeSeconds').value,
                 logRetention: $('logRetention').value,
