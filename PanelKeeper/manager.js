@@ -19,16 +19,23 @@ const libraryInventoryUtils = require('./utils/library-inventory-utils');
 const comicInfoUtils = require('./utils/comicinfo-utils');
 const { buildComicInfoChapterContext } = require('./utils/comicinfo-context-utils');
 const { sanitizeSpecialQcIssue } = require('./utils/qc-special-utils');
+const { unsupportedImagesInDirectory, describeUnsupportedImages, isSupportedPageExtension } = require('./utils/image-format-utils');
 const sharp = require('sharp');
+const { getAutomaticQcActions, hasAutomaticQcActionableIssue } = require('./utils/automatic-qc-utils');
 
 const APP_DIR = __dirname;
-const QC_ANALYSIS_VERSION = 12;
-const LOG_PATH = path.join(APP_DIR, 'manager_history.log');
+const QC_ANALYSIS_VERSION = 14;
+const LOG_PATH = process.env.LOG_PATH ? path.resolve(process.env.LOG_PATH) : path.join(APP_DIR, 'manager_history.log');
 const DEFAULT_LOG_RETENTION = 5000;
 const DEFAULT_LOG_FILE_MAX_BYTES = 2 * 1024 * 1024;
 let logInsertCount = 0;
 let pipelinePromise = null;
 let pipelineGeneration = 0;
+
+const pipelineQcCandidates = new Set();
+let pipelineQcWorkerRunning = false;
+let pipelineQcWorkerRequested = false;
+
 let activeQcJob = null;
 let activeQcMutations = 0;
 const qcMutationWaiters = [];
@@ -495,9 +502,9 @@ function getChapterCoverDesign(series) {
     };
 }
 
-function chapterDesignHash(sourceHash, design, chapter) {
+function chapterDesignHash(sourceHash, design, chapter, series) {
     return crypto.createHash('sha256').update(JSON.stringify({
-        sourceHash, design: chapterCoverGenerator.normalizeDesign(design), chapterKey: chapter.key,
+        sourceHash, series, design: chapterCoverGenerator.normalizeDesign(design), chapterKey: chapter.key,
         chapterLabel: chapter.label, outputFormat: 'webp-lossless-v1'
     })).digest('hex');
 }
@@ -506,7 +513,10 @@ async function applyChapterCoverDesignToFile(archivePath, series, designOverride
     const { destRoot } = getRoots();
     const resolvedArchive = path.resolve(archivePath);
     const seriesPath = path.resolve(destRoot || '', series);
-    if (!destRoot || !isWithin(destRoot, resolvedArchive) || path.dirname(resolvedArchive) !== seriesPath || path.extname(resolvedArchive).toLowerCase() !== '.cbz') {
+    const parent = path.dirname(resolvedArchive);
+    if (!destRoot || !isWithin(seriesPath, resolvedArchive)
+        || (!samePath(parent, seriesPath) && !samePath(parent, path.join(seriesPath, 'Specials')))
+        || path.extname(resolvedArchive).toLowerCase() !== '.cbz') {
         return { changed: false, skipped: true, reason: 'outside_library' };
     }
     const design = designOverride || getChapterCoverDesign(series);
@@ -517,7 +527,7 @@ async function applyChapterCoverDesignToFile(archivePath, series, designOverride
     if (!coverPath) throw new Error(`No cover image found in ${seriesPath}. Add a recognized cover or choose an image from the series folder.`);
     const sourceData = await fs.readFile(coverPath);
     const sourceHash = crypto.createHash('sha256').update(sourceData).digest('hex');
-    const designHash = chapterDesignHash(sourceHash, design, chapter);
+    const designHash = chapterDesignHash(sourceHash, design, chapter, series);
     const before = await fs.stat(resolvedArchive);
     const applied = db.prepare('SELECT design_hash, source_hash, archive_size, archive_mtime FROM chapter_cover_insertions WHERE archive_path=?').get(resolvedArchive);
     if (applied && applied.design_hash === designHash && applied.source_hash === sourceHash
@@ -1147,9 +1157,11 @@ function saveChapterCoverDesign(series, enabled, coverPath, inputDesign) {
             design.textColor, design.outlineColor, design.outlineWidth, design.panelEnabled ? 1 : 0,
             design.panelColor, design.panelOpacity, now);
 
-    const chapters = fs.readdirSync(seriesPath, { withFileTypes: true })
-        .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === '.cbz')
-        .map(entry => path.resolve(seriesPath, entry.name))
+    const chapters = [seriesPath, path.join(seriesPath, 'Specials')]
+        .filter(dir => fs.existsSync(dir))
+        .flatMap(dir => fs.readdirSync(dir, { withFileTypes: true })
+            .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === '.cbz')
+            .map(entry => path.resolve(dir, entry.name)))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
     const id = `${Date.now()}-${crypto.randomBytes(5).toString('hex')}`;
     const addItem = db.prepare("INSERT INTO chapter_cover_job_items (job_id, archive_path, status) VALUES (?, ?, 'pending')");
@@ -1165,7 +1177,7 @@ function saveChapterCoverDesign(series, enabled, coverPath, inputDesign) {
                 if (chapter) {
                     const stat = fs.statSync(archivePath);
                     const saved = db.prepare('SELECT design_hash, source_hash, archive_size, archive_mtime FROM chapter_cover_insertions WHERE archive_path=?').get(archivePath);
-                    const expectedHash = chapterDesignHash(sourceHash, design, chapter);
+                    const expectedHash = chapterDesignHash(sourceHash, design, chapter, target.value);
                     current = Boolean(saved && saved.design_hash === expectedHash && saved.source_hash === sourceHash
                         && Number(saved.archive_size) === stat.size && Number(saved.archive_mtime) === Math.floor(stat.mtimeMs));
                 }
@@ -2090,7 +2102,7 @@ async function sendNotification(message, options = {}) {
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/plain, */*',
-                'User-Agent': 'PanelKeeper/1.10.31'
+                'User-Agent': 'PanelKeeper/1.10.39'
             },
             body: JSON.stringify(payload),
             signal: AbortSignal.timeout(12000),
@@ -2504,7 +2516,8 @@ async function autoResolveChapterCollision(sourceFile, existingFile, canonicalPa
         if (isWithin(destRoot, sourceFile)) {
             await createRecoveryForPath(sourceFile, targetSeriesName);
         } else if (isWithin(sourceRoot, sourceFile)) {
-            await fs.remove(sourceFile);
+
+            await createRecoveryForPath(sourceFile, targetSeriesName);
         } else {
             return { resolved: false, reason: 'The duplicate source is outside the configured source and destination roots.' };
         }
@@ -2512,8 +2525,8 @@ async function autoResolveChapterCollision(sourceFile, existingFile, canonicalPa
         db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(path.resolve(sourceFile));
         resolveFileIssue(sourceFile);
         log(comparison.relation === 'identical'
-            ? `[AUTO DUPLICATE] ${targetSeriesName} ${chapter.label}: the downloaded and library chapters contain identical images in identical order. Removed the incoming duplicate.`
-            : `[AUTO KEEP] ${targetSeriesName} ${chapter.label}: every downloaded image is already present in the library version in the same order. Removed the incomplete duplicate download.`);
+            ? `[AUTO DUPLICATE] ${targetSeriesName} ${chapter.label}: the downloaded and library chapters contain identical images in identical order. Moved the incoming duplicate into Recovery.`
+            : `[AUTO KEEP] ${targetSeriesName} ${chapter.label}: every downloaded image is already present in the library version in the same order. Moved the incomplete duplicate download into Recovery.`);
         return { resolved: true, relation: comparison.relation };
     }
 
@@ -2561,6 +2574,10 @@ async function applyComicInfoPolicyToIncoming(filePath, series, parsed = null) {
     if (isExistingLibraryArchive) await createRecoverySnapshotForPath(filePath, series);
     const result = await zip.writeComicInfoInPlace(filePath, xml);
     return { changed: true, policy, result };
+}
+
+function trackPipelineQcCandidate(candidate) {
+    if (pipelinePromise && candidate) pipelineQcCandidates.add(path.resolve(candidate));
 }
 
 async function processFiles(currentPath, targetSeriesName, destRoot, options = {}) {
@@ -2670,6 +2687,7 @@ async function processFiles(currentPath, targetSeriesName, destRoot, options = {
                     const upgradedPath = autoResult.relation === 'source_superset' ? canonicalPath : collision;
                     await applyCoverRuleToFile(upgradedPath, targetSeriesName).catch(error => log(`[COVER APPLY WARN] ${path.basename(upgradedPath)}: ${error.message}`, 'WARN'));
                     chapterLookup.set(chapter.key, upgradedPath);
+                    trackPipelineQcCandidate(upgradedPath);
                     continue;
                 }
                 const conflictId = savePendingConflict(sourceFile, collision, targetSeriesName, chapter, autoResult.reason, autoResult.comparison);
@@ -2689,6 +2707,7 @@ async function processFiles(currentPath, targetSeriesName, destRoot, options = {
             resolveFileIssue(sourceFile);
             await applyCoverRuleToFile(canonicalPath, targetSeriesName).catch(error => log(`[COVER APPLY WARN] ${path.basename(canonicalPath)}: ${error.message}`, 'WARN'));
             chapterLookup.set(chapter.key, canonicalPath);
+            trackPipelineQcCandidate(canonicalPath);
             continue;
         }
 
@@ -2698,6 +2717,7 @@ async function processFiles(currentPath, targetSeriesName, destRoot, options = {
             db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(path.resolve(sourceFile));
             qcDb.prepare('DELETE FROM qc_cache WHERE path IN (?, ?)').run(path.resolve(sourceFile), path.resolve(canonicalPath));
             chapterLookup.set(chapter.key, canonicalPath);
+            trackPipelineQcCandidate(canonicalPath);
             await applyCoverRuleToFile(canonicalPath, targetSeriesName).catch(error => log(`[COVER APPLY WARN] ${path.basename(canonicalPath)}: ${error.message}`, 'WARN'));
             log(`[MOVED] "${file}" -> "${canonicalName}"`);
         } catch (error) {
@@ -2807,6 +2827,23 @@ async function moveAndRename() {
     return { processed: true, folders: sourceSeries.length, matched: foldersMatched };
 }
 
+function updateMovedChapterCoverReferences(oldPath, newPath) {
+    const previous = path.resolve(oldPath);
+    const current = path.resolve(newPath);
+    if (samePath(previous, current)) return;
+    const transaction = db.transaction(() => {
+        for (const table of ['chapter_cover_insertions', 'cover_insertions']) {
+
+            db.prepare(`UPDATE OR REPLACE "${table}" SET archive_path=? WHERE archive_path=?`).run(current, previous);
+        }
+        db.prepare("UPDATE chapter_cover_job_items SET archive_path=? WHERE archive_path=? AND status IN ('pending','running')")
+            .run(current, previous);
+        db.prepare("UPDATE cover_update_items SET archive_path=? WHERE archive_path=? AND status IN ('pending','running')")
+            .run(current, previous);
+    });
+    transaction();
+}
+
 function updateMovedFileReferences(oldPath, newPath) {
     const oldResolved = path.resolve(oldPath);
     const newResolved = path.resolve(newPath);
@@ -2868,7 +2905,10 @@ async function normalizeRootSpecialFiles() {
                 await fs.ensureDir(destination.directory);
                 await fs.move(sourcePath, destination.path, { overwrite: false });
                 updateMovedFileReferences(sourcePath, destination.path);
+                await applyCoverRuleToFile(destination.path, series)
+                    .catch(error => log(`[COVER SPECIAL MOVE WARN] ${path.basename(destination.path)}: ${error.message}`, 'WARN'));
                 touchedLibrarySeries.add(series);
+                trackPipelineQcCandidate(destination.path);
                 moved++;
                 log(`[SPECIAL NORMALIZE] Moved ${name} into Kavita Specials/ as ${destination.fileName}.`);
             } catch (error) {
@@ -3661,14 +3701,165 @@ async function refreshLibrarySeriesForCompletion(series) {
     return scanLibrarySeriesDirectory(series);
 }
 
+async function renameLibrarySeriesCaseOnly(oldName, newName) {
+    const { destRoot } = getRoots();
+    const oldValidation = validateSeriesName(oldName);
+    const newValidation = validateSeriesName(newName);
+    if (!oldValidation.valid) throw new Error(oldValidation.message);
+    if (!newValidation.valid) throw new Error(newValidation.message);
+    if (oldValidation.value.toLocaleLowerCase() !== newValidation.value.toLocaleLowerCase()) {
+        throw new Error('This operation is reserved for capitalization-only manga title changes.');
+    }
+    if (!destRoot || !(await fs.pathExists(destRoot))) throw new Error('The configured manga library is unavailable.');
+    await yieldToPipeline();
+    await waitForLibrarySeriesScan(oldValidation.value);
+    await waitForCoverMutations();
+    beginQcMutation();
+    let previousRoot = '';
+    let desiredRoot = '';
+    let renamedOnDisk = false;
+    try {
+        const entries = await fs.readdir(destRoot, { withFileTypes: true });
+        const matches = entries.filter(entry => entry.isDirectory()
+            && entry.name.toLocaleLowerCase() === oldValidation.value.toLocaleLowerCase());
+        if (matches.length !== 1) throw new Error(matches.length
+            ? 'Two folders differ only by capitalization. Resolve them manually before renaming.'
+            : 'The matching manga folder is not present in the library.');
+        previousRoot = path.resolve(destRoot, matches[0].name);
+        desiredRoot = path.resolve(destRoot, newValidation.value);
+        if (!isWithin(destRoot, previousRoot) || !isWithin(destRoot, desiredRoot)) throw new Error('Unsafe manga folder path.');
+
+        if (previousRoot !== desiredRoot && await fs.pathExists(desiredRoot)) {
+            const before = await fs.stat(previousRoot);
+            const after = await fs.stat(desiredRoot);
+            if (before.dev !== after.dev || before.ino !== after.ino) {
+                throw new Error('A second manga folder with that capitalization already exists. No folders were merged.');
+            }
+        }
+        if (previousRoot !== desiredRoot) {
+            const tempRoot = path.resolve(destRoot, `.panelkeeper-case-${process.pid}-${Date.now()}-${crypto.randomBytes(5).toString('hex')}`);
+            if (await fs.pathExists(tempRoot)) throw new Error('A temporary rename path is already occupied.');
+            await fs.rename(previousRoot, tempRoot);
+            try { await fs.rename(tempRoot, desiredRoot); }
+            catch (error) {
+                await fs.rename(tempRoot, previousRoot).catch(() => {});
+                throw error;
+            }
+            renamedOnDisk = true;
+        }
+        const now = new Date().toISOString();
+        const oldPrefix = `${previousRoot}${path.sep}`;
+        const newPrefix = `${desiredRoot}${path.sep}`;
+        const mainPathColumns = [
+            ['processed_files','path'], ['chapter_overrides','path'], ['file_issues','path'],
+            ['pending_conflicts','source_path'], ['pending_conflicts','destination_path'],
+            ['cover_insertions','archive_path'], ['cover_insertions','cover_path'],
+            ['series_cover_rules','cover_path'], ['cover_update_jobs','cover_path'],
+            ['cover_update_items','archive_path'], ['series_chapter_cover_designs','source_path'],
+            ['chapter_cover_insertions','archive_path'], ['chapter_cover_insertions','source_path'],
+            ['chapter_cover_job_items','archive_path'], ['recovery_items','original_path'],
+            ['recovery_items','backup_path'], ['library_chapter_inventory','path']
+        ];
+        const seriesColumns = [
+            ['series_mappings','target_series'], ['pending_conflicts','target_series'],
+            ['file_issues','target_series'], ['recovery_items','series'],
+            ['cover_insertions','series'], ['cover_update_jobs','series'],
+            ['chapter_cover_insertions','series'], ['chapter_cover_jobs','series'],
+            ['library_chapter_inventory','series'], ['library_completion_tracking','series'],
+            ['library_completed_chapters','series'], ['library_series_state','series'],
+            ['series_special_numbers','series'], ['series_volume_settings','series'],
+            ['series_ignored_terms','series'], ['series_cover_rules','target_series'],
+            ['series_kavita_cover_sources','target_series'], ['series_chapter_cover_designs','target_series']
+        ];
+        const updateMain = db.transaction(() => {
+            for (const [table, column] of mainPathColumns) {
+                const rows = db.prepare(`SELECT rowid AS id, "${column}" AS value FROM "${table}" WHERE substr("${column}",1,length(?))=?`).all(oldPrefix,oldPrefix);
+                const update = db.prepare(`UPDATE "${table}" SET "${column}"=? WHERE rowid=?`);
+                for (const row of rows) update.run(path.join(desiredRoot,path.relative(previousRoot,row.value)),row.id);
+            }
+            for (const [table, column] of seriesColumns) {
+                db.prepare(`UPDATE "${table}" SET "${column}"=? WHERE lower("${column}")=lower(?)`).run(newValidation.value,oldValidation.value);
+            }
+            db.prepare('UPDATE library_series_state SET last_scanned_at=NULL,updated_at=? WHERE lower(series)=lower(?)').run(now,newValidation.value);
+            const template = db.prepare("SELECT value FROM settings WHERE key='comicInfoSeriesTemplates'").get();
+            if (template?.value) {
+                try {
+                    const templates = JSON.parse(template.value);
+                    const oldKey = Object.keys(templates).find(key => key.toLocaleLowerCase() === newValidation.value.toLocaleLowerCase());
+                    if (oldKey && oldKey !== newValidation.value) {
+                        templates[newValidation.value] = templates[oldKey];
+                        delete templates[oldKey];
+                        db.prepare("UPDATE settings SET value=? WHERE key='comicInfoSeriesTemplates'").run(JSON.stringify(templates));
+                    }
+                } catch (error) { log(`[MANGA CASE] Could not update ComicInfo template label: ${error.message}`, 'WARN'); }
+            }
+        });
+        try { updateMain(); }
+        catch (error) {
+            if (renamedOnDisk) await fs.rename(desiredRoot, previousRoot).catch(rollbackError => {
+                log(`[MANGA CASE] Folder rollback failed: ${rollbackError.message}`, 'ERROR');
+            });
+            throw new Error(`The capitalization change could not be saved; filesystem rollback was attempted: ${error.message}`);
+        }
+        try {
+            const updateQc = qcDb.transaction(() => {
+                for (const [table, column] of [['qc_cache','path'], ['qc_dismissed','path'], ['qc_scan_dirs','path']]) {
+                    const rows = qcDb.prepare(`SELECT rowid AS id, "${column}" AS value FROM "${table}" WHERE substr("${column}",1,length(?))=?`).all(oldPrefix,oldPrefix);
+                    const update = qcDb.prepare(`UPDATE "${table}" SET "${column}"=? WHERE rowid=?`);
+                    for (const row of rows) update.run(path.join(desiredRoot,path.relative(previousRoot,row.value)),row.id);
+                }
+
+                qcDb.prepare('UPDATE qc_cache SET parser_version=0 WHERE substr(path,1,length(?))=?').run(newPrefix,newPrefix);
+            });
+            updateQc();
+        } catch (error) {
+            log(`[MANGA CASE] QC cache path migration failed and needs a fresh inspection: ${error.message}`, 'WARN');
+            qcDb.prepare('DELETE FROM qc_cache WHERE substr(path,1,length(?))=?').run(newPrefix,newPrefix);
+        }
+        seriesVolumeModeCache.delete(volumeModeCacheKey(newValidation.value));
+        seriesIgnoredTermsCache.delete(volumeModeCacheKey(newValidation.value));
+        await scanLibrarySeriesDirectory(newValidation.value).catch(error => log(`[MANGA CASE] Library inventory refresh delayed: ${error.message}`, 'WARN'));
+        const design = getChapterCoverDesign(newValidation.value);
+        if (design?.enabled) {
+            try { saveChapterCoverDesign(newValidation.value,true,design.sourcePath,design); }
+            catch (error) { log(`[MANGA CASE] Cover refresh queue failed: ${error.message}`, 'WARN'); }
+        }
+        log(`[MANGA CASE] Corrected library title capitalization: "${path.basename(previousRoot)}" → "${newValidation.value}".`);
+        return { success: true, merged: false, caseOnly: true, oldName: path.basename(previousRoot), newName: newValidation.value,
+            message: `Updated the manga folder capitalization to "${newValidation.value}" and synchronized its mapping, settings, inventory and QC records. Scan QC to identify chapter filenames that still use the old casing.` };
+    } finally { endQcMutation(); }
+}
+
+async function moveChapterWithCaseSupport(source, destination) {
+    const from = path.resolve(source), to = path.resolve(destination);
+    if (from === to) return false;
+    const destStat = await fs.stat(to).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+    });
+    if (!destStat) { await fs.move(from,to,{overwrite:false}); return true; }
+    const srcStat = await fs.stat(from);
+    if (srcStat.dev !== destStat.dev || srcStat.ino !== destStat.ino || from.toLocaleLowerCase() !== to.toLocaleLowerCase()) {
+        throw new Error(`The destination ${path.basename(to)} already exists; no chapter was overwritten.`);
+    }
+    const temp = path.join(path.dirname(from), `.panelkeeper-case-file-${process.pid}-${Date.now()}-${crypto.randomBytes(5).toString('hex')}.tmp`);
+    await fs.rename(from,temp);
+    try { await fs.rename(temp,to); }
+    catch (error) { await fs.rename(temp,from).catch(() => {}); throw error; }
+    return true;
+}
+
 async function renameLibrarySeries(oldName, newName) {
     const { destRoot } = getRoots();
     const oldValidation = validateSeriesName(oldName);
     const newValidation = validateSeriesName(newName);
     if (!oldValidation.valid) throw new Error(oldValidation.message);
     if (!newValidation.valid) throw new Error(newValidation.message);
-    if (oldValidation.value.toLocaleLowerCase() === newValidation.value.toLocaleLowerCase()) {
+    if (oldValidation.value === newValidation.value) {
         return { success: true, message: 'The manga folder already has that name.', merged: false };
+    }
+    if (oldValidation.value.toLocaleLowerCase() === newValidation.value.toLocaleLowerCase()) {
+        return renameLibrarySeriesCaseOnly(oldValidation.value, newValidation.value);
     }
 
     await yieldToPipeline();
@@ -3864,6 +4055,16 @@ async function renameLibrarySeries(oldName, newName) {
                 log(`[COMICINFO UPDATE] Manga ${mergeResult ? 'merge' : 'rename'} completed, but metadata synchronization failed: ${error.message}`, 'WARN');
             }
         }
+
+        const renamedCoverDesign = getChapterCoverDesign(newValidation.value);
+        if (renamedCoverDesign?.enabled) {
+            try {
+                const refresh = saveChapterCoverDesign(newValidation.value, true, renamedCoverDesign.sourcePath, renamedCoverDesign);
+                log(`[CHAPTER COVER RENAME] Queued ${refresh.job?.total || 0} chapter(s) for identity verification in ${newValidation.value}.`);
+            } catch (error) {
+                log(`[CHAPTER COVER RENAME] Manga rename succeeded but cover refresh could not be queued: ${error.message}`, 'WARN');
+            }
+        }
         if (mergeResult) {
             log(`Merged manga folder "${oldValidation.value}" into "${newValidation.value}"; ${mergeResult.moved} file(s) moved, ${mergeResult.renamed} collision(s) retained with unique names, ${conflictsCreated} chapter conflict(s) queued.`);
         } else {
@@ -3988,8 +4189,7 @@ async function renameLibraryChapter(series, filePath, chapterInput) {
         const destination = buildChapterDestination(seriesPath, validation.value, parsed);
         await fs.ensureDir(destination.directory);
         const target = destination.path;
-        if (!samePath(source, target) && getPathPresence(target) === true) throw new Error(`The destination already exists: ${path.basename(target)}. No file was overwritten.`);
-        if (!samePath(source, target)) await fs.move(source, target, { overwrite: false });
+        if (source !== target) await moveChapterWithCaseSupport(source, target);
         const now = new Date().toISOString();
         const update = db.transaction(() => {
             db.prepare('UPDATE processed_files SET path=? WHERE path=?').run(path.resolve(target), source);
@@ -3998,6 +4198,7 @@ async function renameLibraryChapter(series, filePath, chapterInput) {
             db.prepare('UPDATE file_issues SET path=?, reason=?, updated_at=? WHERE path=?')
                 .run(path.resolve(target), `Manually renamed to ${path.basename(target)}.`, now, source);
             db.prepare('UPDATE cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(target), source);
+            db.prepare('UPDATE chapter_cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(target), source);
             db.prepare('UPDATE pending_conflicts SET source_path=? WHERE source_path=? AND status=\'pending\'').run(path.resolve(target), source);
         });
         update();
@@ -4015,6 +4216,7 @@ async function renameLibraryChapter(series, filePath, chapterInput) {
                 log(`[COMICINFO UPDATE] Chapter rename completed, but metadata could not be synchronized for ${path.basename(target)}: ${error.message}`, 'WARN');
             }
         }
+        await applyCoverRuleToFile(target, validation.value).catch(error => log(`[COVER RENAME WARN] ${path.basename(target)}: ${error.message}`, 'WARN'));
         await scanLibrarySeriesDirectory(validation.value);
         log(`Renamed library chapter: ${path.basename(source)} -> ${path.basename(target)}.${metadataUpdated ? ' ComicInfo identity fields updated.' : ''}`);
         return { success: true, metadataUpdated, message: `Renamed to ${path.basename(target)}.${metadataUpdated ? ' ComicInfo.xml was updated to match the new chapter identity.' : ''}` };
@@ -4050,7 +4252,7 @@ function parseQcChapterPath(filePath, series) {
 
 function hasCorrectName(filePath, series) {
     const fileName = path.basename(filePath);
-    return fileName.toLowerCase().startsWith(`${series} - `.toLowerCase());
+    return fileName.startsWith(`${series} - `);
 }
 
 async function hashFile(filePath) {
@@ -4112,7 +4314,32 @@ async function collectDirectoryDuplicateGroups(dirPath, destRoot, generationAtSt
     return { groups, interrupted: false };
 }
 
-async function processDirectoryDuplicateGroups(groups, { generationAtStart } = {}) {
+async function flagDirectoryDuplicateCandidates(groups, { generationAtStart } = {}) {
+    const selectCache = qcDb.prepare('SELECT size, mtime, issues, reason, scanned_at, parser_version FROM qc_cache WHERE path=?');
+    const updateCache = qcDb.prepare(`UPDATE qc_cache SET issues=?, reason=?, has_issues=1 WHERE path=?`);
+    for (const entries of groups.values()) {
+        if (entries.length < 2) continue;
+        for (const entry of entries) {
+            if (pipelinePromise || activeQcMutations > 0 || (generationAtStart !== undefined && pipelineGeneration !== generationAtStart)) {
+                return { interrupted: true };
+            }
+            const resolved = path.resolve(entry.path);
+            const row = selectCache.get(resolved);
+            if (!row) continue;
+            const stat = await fs.stat(resolved).catch(() => null);
+            if (!stat || stat.size !== row.size || Math.floor(stat.mtimeMs) !== row.mtime) continue;
+            let issues;
+            try { issues = JSON.parse(row.issues); } catch (_) { continue; }
+            if (!Array.isArray(issues) || issues.includes('duplicate_chapter')) continue;
+            const filtered = filterQcIssuesHandledByReviewQueues(resolved, [...issues, 'duplicate_chapter']);
+            if (!filtered.includes('duplicate_chapter')) continue;
+            updateCache.run(JSON.stringify(filtered), row.reason || 'Multiple CBZ files match this chapter identity; review them before choosing a version.', resolved);
+        }
+    }
+    return { interrupted: false };
+}
+
+async function processDirectoryDuplicateGroups(groups, { generationAtStart, allowRenames = true, allowReviewRouting = true } = {}) {
     const { destRoot } = getRoots();
     if (!destRoot) return { archived: 0, flagged: 0, interrupted: false };
     let archived = 0;
@@ -4165,7 +4392,11 @@ async function processDirectoryDuplicateGroups(groups, { generationAtStart } = {
                     .get(representative.series, chapterKey);
                 const pendingManualAttention = distinctContent.some(item => db.prepare(`SELECT 1 FROM file_issues
                     WHERE status='pending' AND kind='manual_chapter' AND path=? LIMIT 1`).get(path.resolve(item.path)));
-                if (!activeConflict && !pendingManualAttention) {
+                if (!allowReviewRouting) {
+
+                    await flagDirectoryDuplicateCandidates(new Map([[chapterKey, distinctContent]]), { generationAtStart });
+                }
+                if (allowReviewRouting && !activeConflict && !pendingManualAttention) {
                     const pairKeys = new Set();
                     for (let index = 1; index < distinctContent.length; index++) {
                         const left = distinctContent[index - 1];
@@ -4185,7 +4416,7 @@ async function processDirectoryDuplicateGroups(groups, { generationAtStart } = {
                         log(`[QC → CONFLICT #${conflictId}] Non-identical copies of ${right.chapter.label} were preserved for comparison.`, 'WARN');
                     }
                 }
-                for (const item of distinctContent) clearQcIssueFlag(item.path, 'duplicate_chapter');
+                if (allowReviewRouting) for (const item of distinctContent) clearQcIssueFlag(item.path, 'duplicate_chapter');
             } else {
                 for (const item of distinctContent) clearQcIssueFlag(item.path, 'duplicate_chapter');
             }
@@ -4222,7 +4453,7 @@ async function processDirectoryDuplicateGroups(groups, { generationAtStart } = {
         if (pipelinePromise || (generationAtStart !== undefined && pipelineGeneration !== generationAtStart)) {
             return { archived, flagged, interrupted: true };
         }
-        if (hasCopyCounter && keepers[0]) {
+        if (hasCopyCounter && allowRenames && keepers[0]) {
             const keeper = keepers[0];
             const keeperSeriesPath = path.resolve(destRoot, keeper.series);
             const canonicalPath = buildChapterDestination(keeperSeriesPath, keeper.series, { ...keeper.chapter }).path;
@@ -4235,8 +4466,11 @@ async function processDirectoryDuplicateGroups(groups, { generationAtStart } = {
                 try {
                     await fs.ensureDir(path.dirname(canonicalPath));
                     await fs.move(keeper.path, canonicalPath, { overwrite: false });
+                    updateMovedChapterCoverReferences(keeper.path, canonicalPath);
                     qcDb.prepare('DELETE FROM qc_cache WHERE path=?').run(path.resolve(keeper.path));
                     db.prepare('DELETE FROM processed_files WHERE path=?').run(path.resolve(keeper.path));
+                    await applyCoverRuleToFile(canonicalPath, keeper.series)
+                        .catch(error => log(`[COVER QC DUPLICATE WARN] ${path.basename(canonicalPath)}: ${error.message}`, 'WARN'));
                     log(`[QC DUPLICATE NORMALIZED] Renamed the kept highest-numbered copy to ${path.basename(canonicalPath)}.`);
                 } catch (error) {
                     log(`[QC DUPLICATE RENAME] Could not normalize ${path.basename(keeper.path)}: ${error.message}`, 'WARN');
@@ -4262,7 +4496,7 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
     const batchLimit = Math.max(5, Math.min(100, Number(batchSize) || 20));
     const pauseMs = Math.max(0, Math.min(250, Number(batchDelayMs) || 0));
     let pendingFixes = [];
-    const automaticFixesEnabled = () => autoFix || Boolean(qcDb.prepare('SELECT auto_fix FROM qc_scan_runs WHERE id=?').get(runId)?.auto_fix);
+    const automaticFixesEnabled = () => false;
 
     const upsertCache = qcDb.prepare(`INSERT INTO qc_cache (path, size, mtime, issues, reason, has_issues, scanned_at, parser_version)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -4277,7 +4511,8 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
         if (!pendingFixes.length) return;
         const batch = pendingFixes;
         pendingFixes = [];
-        const result = await fixLibraryIssues(batch);
+
+        const result = await fixLibraryIssues(batch, { automaticQcActions: getAutomaticQcActions(getSetting) });
         repaired += result.fixed || 0;
     };
 
@@ -4292,6 +4527,7 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
         let directoryReadComplete = false;
         let directoryReadError = null;
         const pipelineGenerationAtStart = pipelineGeneration;
+        const currentQcActions = getAutomaticQcActions(getSetting);
         try {
 
             const directory = await require('fs').promises.opendir(dirRow.path);
@@ -4357,6 +4593,11 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
                     try {
                         const archive = await zip.readZipDirectory(filePath);
                         if (archive.entries.some(item => zip.isComicInfo(item.name))) fileIssues.push('has_xml');
+                        const unsupportedPages = unsupportedImagesInDirectory(archive);
+                        if (unsupportedPages.length) {
+                            fileIssues.push('unsupported_image_format');
+                            reason = [reason, describeUnsupportedImages(unsupportedPages)].filter(Boolean).join(' ');
+                        }
                     } catch (error) {
                         fileIssues.push(archiveIssueKind(error) === 'unsupported_archive' ? 'unsupported_archive' : 'bad_archive');
                         reason = reason ? `${reason} Archive check: ${error.message}` : error.message;
@@ -4383,7 +4624,9 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
                     qcDb.prepare('UPDATE qc_cache SET has_issues=? WHERE path=?').run(fileIssues.length ? 1 : 0, resolvedPath);
                 }
 
-                if (automaticFixesEnabled() && fileIssues.some(issue => issue === 'bad_name' || issue === 'unparsed_chapter' || issue === 'special_needs_kavita_path' || issue === 'bad_archive' || issue === 'unsupported_archive' || (issue === 'has_xml' && getComicInfoPolicy(series) !== 'leave'))) {
+                if (automaticFixesEnabled() && hasAutomaticQcActionableIssue(
+                    fileIssues, currentQcActions, getComicInfoPolicy(series)
+                )) {
                     pendingFixes.push({ series, file, path: filePath, issues: fileIssues, reason });
                 }
 
@@ -4413,8 +4656,20 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
                 if (duplicateScan.interrupted) {
                     pausedForPipeline = true;
                 } else {
-                    const duplicateResult = await processDirectoryDuplicateGroups(duplicateScan.groups, { generationAtStart: pipelineGenerationAtStart });
-                    if (duplicateResult.interrupted) pausedForPipeline = true;
+                    const enabled = automaticFixesEnabled();
+                    const choices = getAutomaticQcActions(getSetting);
+                    if (!enabled || !choices.resolveDuplicates) {
+
+                        const result = await flagDirectoryDuplicateCandidates(duplicateScan.groups, { generationAtStart: pipelineGenerationAtStart });
+                        if (result.interrupted) pausedForPipeline = true;
+                    } else {
+                        const duplicateResult = await processDirectoryDuplicateGroups(duplicateScan.groups, {
+                            generationAtStart: pipelineGenerationAtStart,
+                            allowRenames: choices.repairNames,
+                            allowReviewRouting: choices.routeToReview
+                        });
+                        if (duplicateResult.interrupted) pausedForPipeline = true;
+                    }
                 }
             } catch (error) {
                 log(`QC duplicate check could not finish for "${dirRow.path}": ${error.message}`, 'WARN');
@@ -4464,13 +4719,8 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
 }
 
 function startQcScan({ reason = 'manual QC scan', autoFix = false, useCache = true, resumeId = null } = {}) {
+    autoFix = false;
     if (activeQcJob && activeQcJob.status === 'running') {
-        if (autoFix && !activeQcJob.autoFix) {
-
-            qcDb.prepare('UPDATE qc_scan_runs SET auto_fix=1, reason=? WHERE id=?').run(reason, activeQcJob.id);
-            activeQcJob.autoFix = true;
-            activeQcJob.reason = reason;
-        }
         return { ...activeQcJob, progress: { ...activeQcJob.progress }, alreadyRunning: true };
     }
     const { destRoot } = getRoots();
@@ -4483,7 +4733,8 @@ function startQcScan({ reason = 'manual QC scan', autoFix = false, useCache = tr
 
         qcDb.prepare("UPDATE qc_scan_dirs SET status='pending' WHERE run_id=? AND status='scanning'").run(run.id);
         reason = run.reason || reason;
-        autoFix = Boolean(run.auto_fix);
+        autoFix = false;
+        if (run.auto_fix) qcDb.prepare('UPDATE qc_scan_runs SET auto_fix=0 WHERE id=?').run(run.id);
     } else {
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const now = new Date().toISOString();
@@ -4520,7 +4771,7 @@ function startQcScan({ reason = 'manual QC scan', autoFix = false, useCache = tr
             qcDb.prepare("UPDATE qc_scan_runs SET status='completed', finished_at=?, updated_at=?, error=NULL WHERE id=?")
                 .run(new Date().toISOString(), new Date().toISOString(), job.id);
             qcDb.prepare("DELETE FROM qc_scan_dirs WHERE run_id=? AND status <> 'error'").run(job.id);
-            if (job.reason === 'scheduled automatic QC') {
+            if (job.reason === 'scheduled full QC inspection') {
                 db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
                     .run('lastAutoQC', new Date().toISOString());
             }
@@ -4585,6 +4836,7 @@ function filterQcIssuesHandledByReviewQueues(filePath, issueList) {
             manual_chapter: ['bad_name', 'unparsed_chapter', 'special_needs_kavita_path'],
             bad_archive: ['bad_archive'],
             unsupported_archive: ['unsupported_archive'],
+            unsupported_image_format: ['unsupported_image_format'],
             xml_cleanup_failed: ['has_xml', 'xml_cleanup_failed'],
             move_failed: ['move_failed']
         }[String(attention.kind)] || [];
@@ -4909,7 +5161,7 @@ async function reconcileQueuedChapterItems() {
                     await fs.move(fullPath, proposedPath, { overwrite: false });
                     await trackIndexedRename(targetDirectory, targetSeries, chapter, fullPath, proposedPath);
                     db.prepare('UPDATE chapter_overrides SET path=? WHERE path=?').run(path.resolve(proposedPath), fullPath);
-                    db.prepare('UPDATE cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(proposedPath), fullPath);
+                    updateMovedChapterCoverReferences(fullPath, proposedPath);
                     db.prepare('DELETE FROM processed_files WHERE path=?').run(fullPath);
                     qcDb.prepare('DELETE FROM qc_cache WHERE path IN (?, ?)').run(fullPath, path.resolve(proposedPath));
                     updateIssue.run('fixed', `Re-evaluated and renamed to ${path.basename(proposedPath)} using the updated chapter parser.`, now(), issue.id);
@@ -4989,7 +5241,7 @@ async function reconcileQueuedChapterItems() {
                             .run(now(), conflict.id);
                         db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(sourcePath);
                         db.prepare('DELETE FROM processed_files WHERE path=?').run(sourcePath);
-                        db.prepare('UPDATE cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(proposedPath), sourcePath);
+                        updateMovedChapterCoverReferences(sourcePath, proposedPath);
                         qcDb.prepare('DELETE FROM qc_cache WHERE path IN (?, ?)').run(sourcePath, path.resolve(proposedPath));
                         resolveFileIssue(sourcePath);
                         await applyCoverRuleToFile(proposedPath, targetSeries).catch(error => log(`[COVER APPLY WARN] ${path.basename(proposedPath)}: ${error.message}`, 'WARN'));
@@ -5061,12 +5313,15 @@ function resolveRecoveryArchive(recoveryId) {
 
 async function getArchivePageList(filePath, series = '') {
     const directory = await zip.readZipDirectory(filePath);
-    const pages = zip.imageEntries(directory, { includeManaged: true }).map((entry, index) => ({
+    const pages = zip.imageEntries(directory, { includeManaged: true, includeUnsupported: true }).map((entry, index) => ({
         index,
         entryIndex: entry.index,
         name: zip.displayImageName(entry.name),
         size: entry.uncompressedSize,
-        managedCover: zip.isManagedFirstImage(entry.name)
+        managedCover: zip.isManagedFirstImage(entry.name),
+        extension: path.extname(entry.name).toLowerCase(),
+        unsupportedFormat: !isSupportedPageExtension(path.extname(entry.name)),
+        previewable: ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp', '.svg', '.ico'].includes(path.extname(entry.name).toLowerCase())
     }));
     return {
         fileName: path.basename(filePath),
@@ -5130,7 +5385,7 @@ async function getLibraryArchivePage(candidatePath, index) {
 async function getArchivePage(filePath, entryIndex) {
     const directory = await zip.readZipDirectory(filePath);
     const targetIndex = Number(entryIndex);
-    const page = zip.imageEntries(directory, { includeManaged: true }).find(entry => entry.index === targetIndex);
+    const page = zip.imageEntries(directory, { includeManaged: true, includeUnsupported: true }).find(entry => entry.index === targetIndex);
     if (!page) throw new Error('Page not found. Refresh the page list and try again.');
     return { archivePath: filePath, entry: page };
 }
@@ -5182,12 +5437,14 @@ async function deleteArchivePage(kind, id, entryIndex) {
     try {
         const directory = await zip.readZipDirectory(filePath);
         const target = directory.entries.find(entry => entry.index === Number(entryIndex));
-        const currentPages = zip.imageEntries(directory, { includeManaged: true });
+        const currentPages = zip.imageEntries(directory, { includeManaged: true, includeUnsupported: true });
         if (!target || !currentPages.some(entry => entry.index === target.index)) throw new Error('The selected page no longer exists. Refresh the viewer.');
         if (zip.isManagedFirstImage(target.name)) throw new Error('This is a PanelKeeper-managed chapter cover. Change it in Chapter Covers instead of deleting it here.');
         const editablePageCount = currentPages.filter(entry => !zip.isManagedFirstImage(entry.name)).length;
         if (editablePageCount <= 1) throw new Error('The last chapter page cannot be deleted. A CBZ must retain at least one chapter image.');
-        const snapshot = kind === 'library' ? await createRecoverySnapshotForPath(filePath, resolved.librarySeries) : null;
+        const snapshot = kind === 'library' || kind === 'issue'
+            ? await createRecoverySnapshotForPath(filePath, resolved.librarySeries || resolved.issue?.target_series || 'Unsorted')
+            : null;
         const removed = await zip.deleteEntryInPlace(filePath, target.index);
         await updateEditedArchiveStats(filePath, resolved.issue || null, resolved.item || null, resolved.librarySeries || '');
         const locationLabel = kind === 'recovery' ? 'Recovery copy' : kind === 'library' ? 'library chapter' : 'Attention file';
@@ -5202,7 +5459,9 @@ async function reorderArchivePages(kind, id, orderedEntryIndices) {
     await yieldToPipeline();
     beginQcMutation();
     try {
-        const snapshot = kind === 'library' ? await createRecoverySnapshotForPath(filePath, resolved.librarySeries) : null;
+        const snapshot = kind === 'library' || kind === 'issue'
+            ? await createRecoverySnapshotForPath(filePath, resolved.librarySeries || resolved.issue?.target_series || 'Unsorted')
+            : null;
         const result = await zip.reorderImageEntriesInPlace(filePath, orderedEntryIndices);
         if (result.changed) await updateEditedArchiveStats(filePath, resolved.issue || null, resolved.item || null, resolved.librarySeries || '');
         else if (snapshot) {
@@ -5306,7 +5565,7 @@ function getQcResults({ page = 0, limit = 50, search = '', series = '', issue = 
     const term = String(search ?? '').slice(0, 200);
     const selectedSeries = String(series || '').trim().slice(0, 200);
     const selectedIssue = String(issue || '').trim();
-    const allowedIssues = new Set(['bad_name', 'unparsed_chapter', 'has_xml', 'bad_archive', 'unsupported_archive', 'duplicate_chapter', 'special_needs_kavita_path', 'xml_cleanup_failed', 'move_failed']);
+    const allowedIssues = new Set(['bad_name', 'unparsed_chapter', 'has_xml', 'bad_archive', 'unsupported_archive', 'unsupported_image_format', 'duplicate_chapter', 'special_needs_kavita_path', 'xml_cleanup_failed', 'move_failed']);
     const { destRoot } = getRoots();
     const conditions = ['has_issues=1', `NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)`];
     const params = [];
@@ -5426,13 +5685,19 @@ function removeStaleConflict(id) {
     return { success: true, message: 'Stale conflict record removed. No manga files were deleted.' };
 }
 
-async function fixLibraryIssues(fileList) {
+async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
     const { destRoot } = getRoots();
     if (!Array.isArray(fileList)) throw new Error('Expected a list of QC issues.');
     let fixed = 0;
     let sentToAttention = 0;
     let sentToConflicts = 0;
     let inspected = 0;
+
+    const allowNames = !automaticQcActions || automaticQcActions.repairNames;
+    const allowSpecials = !automaticQcActions || automaticQcActions.organizeSpecials;
+    const allowComicInfo = !automaticQcActions || automaticQcActions.applyComicInfo;
+    const allowReview = !automaticQcActions || automaticQcActions.routeToReview;
+    const allowUnsupportedImageReview = !automaticQcActions || automaticQcActions.routeUnsupportedImages;
     const saveQcCache = qcDb.prepare(`INSERT INTO qc_cache (path, size, mtime, issues, reason, has_issues, scanned_at, parser_version)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime,
@@ -5455,19 +5720,24 @@ async function fixLibraryIssues(fileList) {
         let currentPath = fullPath;
         const series = seriesNameFromPath(fullPath, destRoot);
         const remainingIssues = new Set(item.issues);
+
+        const allowCopyNameNormalization = !automaticQcActions || automaticQcActions.resolveDuplicates
+            || extractDownloaderCopyNumber(path.basename(currentPath)) === null;
         let reason = String(item.reason || '');
 
         await yieldToPipeline();
         beginQcMutation();
         try {
-            if (remainingIssues.has('special_needs_kavita_path')) {
+            if (allowSpecials && allowCopyNameNormalization && remainingIssues.has('special_needs_kavita_path')) {
                 const special = parseQcChapterPath(currentPath, series);
                 if (!special?.special) {
                     remainingIssues.delete('special_needs_kavita_path');
                 } else {
                     const destination = buildChapterDestination(path.resolve(destRoot, series), series, special, { persistSpecial: true });
                     await fs.ensureDir(destination.directory);
-                    if (!samePath(currentPath, destination.path) && getPathPresence(destination.path) === true) {
+                    if (!samePath(currentPath, destination.path) && getPathPresence(destination.path) === true && !allowReview) {
+                        reason = 'QC cannot normalize this Special automatically: its destination exists. Automatic review routing is disabled.';
+                    } else if (!samePath(currentPath, destination.path) && getPathPresence(destination.path) === true) {
                         const id = savePendingConflict(currentPath, destination.path, series, special,
                             `QC assigned ${path.basename(destination.path)} to this Special, but that SP## destination already exists. Both files were preserved for review.`);
                         sentToConflicts++;
@@ -5481,6 +5751,7 @@ async function fixLibraryIssues(fileList) {
                         await fs.move(previousPath, destination.path, { overwrite: false });
                         updateMovedFileReferences(previousPath, destination.path);
                         currentPath = destination.path;
+                        await applyCoverRuleToFile(currentPath, series).catch(error => log(`[COVER RENAME WARN] ${path.basename(currentPath)}: ${error.message}`, 'WARN'));
                         remainingIssues.delete('special_needs_kavita_path');
                         remainingIssues.delete('bad_name');
                         remainingIssues.delete('unparsed_chapter');
@@ -5493,11 +5764,18 @@ async function fixLibraryIssues(fileList) {
                 }
             }
 
-            if (remainingIssues.has('bad_name') || remainingIssues.has('unparsed_chapter')) {
+            if (allowNames && allowCopyNameNormalization && (allowSpecials || !remainingIssues.has('special_needs_kavita_path'))
+                && (remainingIssues.has('bad_name') || remainingIssues.has('unparsed_chapter'))) {
                 const chapter = parseQcChapterPath(currentPath, series);
                 if (chapter) {
                     const newPath = path.join(path.dirname(currentPath), `${series} - ${chapter.label}.cbz`);
-                    if (!samePath(currentPath, newPath) && await fs.pathExists(newPath)) {
+                    const capitalizationChange = currentPath !== newPath && currentPath.toLocaleLowerCase() === newPath.toLocaleLowerCase();
+                    const sameExistingFile = capitalizationChange && await Promise.all([fs.stat(currentPath),fs.stat(newPath).catch(() => null)])
+                        .then(([a,b]) => Boolean(b && a.dev === b.dev && a.ino === b.ino));
+                    const collisionExists = currentPath !== newPath && await fs.pathExists(newPath) && !sameExistingFile;
+                    if (collisionExists && !allowReview) {
+                        reason = 'QC cannot rename this chapter automatically: its destination exists. Automatic review routing is disabled.';
+                    } else if (collisionExists) {
                         const id = savePendingConflict(currentPath, newPath, series, chapter,
                             'Quality Control found a filename normalization collision; both library files were preserved.');
                         sentToConflicts++;
@@ -5508,11 +5786,13 @@ async function fixLibraryIssues(fileList) {
                         clearQcIssueFlag(newPath, 'duplicate_chapter');
                         resolveFileIssue(currentPath);
                         log(`[QC REVIEW #${id}] Rename would collide with an existing chapter; both files were preserved and the rename/duplicate review was transferred to Conflicts.`, 'WARN');
-                    } else if (!samePath(currentPath, newPath)) {
-                        await fs.move(currentPath, newPath, { overwrite: false });
+                    } else if (currentPath !== newPath) {
+                        await moveChapterWithCaseSupport(currentPath, newPath);
+                        updateMovedChapterCoverReferences(currentPath, newPath);
                         qcDb.prepare('DELETE FROM qc_cache WHERE path=?').run(path.resolve(currentPath));
                         log(`[QC FIX] Renamed "${path.basename(currentPath)}" -> "${path.basename(newPath)}"`);
                         currentPath = newPath;
+                        await applyCoverRuleToFile(currentPath, series).catch(error => log(`[COVER RENAME WARN] ${path.basename(currentPath)}: ${error.message}`, 'WARN'));
                         remainingIssues.delete('bad_name');
                         remainingIssues.delete('unparsed_chapter');
                         resolveFileIssue(currentPath);
@@ -5522,7 +5802,7 @@ async function fixLibraryIssues(fileList) {
                         remainingIssues.delete('unparsed_chapter');
                         resolveFileIssue(currentPath);
                     }
-                } else {
+                } else if (allowReview) {
                     const currentStats = await fs.stat(currentPath);
                     const attentionReason = `QC could not derive a safe chapter identifier from this filename: ${path.basename(currentPath)}. Assign the correct chapter/Special label in Files Needing Attention, or delete the file if it is not a chapter.`;
                     recordFileIssue(currentPath, 'unparsed_chapter', attentionReason, currentStats);
@@ -5533,7 +5813,18 @@ async function fixLibraryIssues(fileList) {
                 }
             }
 
-            if (remainingIssues.has('has_xml') && getComicInfoPolicy(series) !== 'leave') {
+            if (!allowNames && allowReview && remainingIssues.has('unparsed_chapter')) {
+                const currentStats = await fs.stat(currentPath).catch(() => null);
+                if (currentStats) {
+                    recordFileIssue(currentPath, 'unparsed_chapter',
+                        `QC cannot identify a safe chapter name for ${path.basename(currentPath)}. Automatic renaming is disabled; assign a chapter manually in Attention.`, currentStats);
+                    sentToAttention++;
+                    remainingIssues.delete('unparsed_chapter');
+                    remainingIssues.delete('bad_name');
+                }
+            }
+
+            if (allowComicInfo && remainingIssues.has('has_xml') && getComicInfoPolicy(series) !== 'leave') {
                 try {
                     const result = await applyComicInfoPolicyToIncoming(currentPath, series);
                     if (result.missingTemplate) throw new Error(`The saved ${result.policy} policy requires a global or manga-specific ComicInfo template.`);
@@ -5549,12 +5840,12 @@ async function fixLibraryIssues(fileList) {
                     remainingIssues.add('xml_cleanup_failed');
                     log(`[QC COMICINFO POLICY FAILED] ${path.basename(currentPath)}: ${error.message}. Sent to Files Needing Attention.`, 'ERROR');
                 }
-            } else if (remainingIssues.has('has_xml')) {
+            } else if (remainingIssues.has('has_xml') && getComicInfoPolicy(series) === 'leave') {
 
                 remainingIssues.delete('has_xml');
             }
 
-            if (remainingIssues.has('duplicate_chapter')) {
+            if (allowReview && remainingIssues.has('duplicate_chapter')) {
                 const chapter = parseQcChapterPath(currentPath, series);
                 const collision = chapter ? await findChapterCollision(path.resolve(destRoot, series), series, chapter, currentPath) : null;
                 if (collision) {
@@ -5566,7 +5857,11 @@ async function fixLibraryIssues(fileList) {
                 remainingIssues.delete('duplicate_chapter');
             }
 
-            for (const issueName of ['bad_archive', 'unsupported_archive', 'xml_cleanup_failed', 'move_failed']) {
+            const reviewKinds = [
+                ...(allowReview ? ['bad_archive', 'unsupported_archive', 'xml_cleanup_failed', 'move_failed'] : []),
+                ...(allowUnsupportedImageReview ? ['unsupported_image_format'] : [])
+            ];
+            for (const issueName of reviewKinds) {
                 if (!remainingIssues.has(issueName)) continue;
                 const stats = await fs.stat(currentPath).catch(() => null);
                 if (stats) {
@@ -5653,7 +5948,7 @@ async function setManualChapterForIssueInternal(issueId, chapterInput, { deferPi
         qcDb.prepare('DELETE FROM qc_cache WHERE path IN (?, ?)').run(fullPath, path.resolve(targetPath));
         db.prepare('DELETE FROM processed_files WHERE path=?').run(fullPath);
         db.prepare('UPDATE chapter_overrides SET path=? WHERE path=?').run(path.resolve(targetPath), fullPath);
-        db.prepare('UPDATE cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(targetPath), fullPath);
+        updateMovedChapterCoverReferences(fullPath, targetPath);
         db.prepare("UPDATE file_issues SET status='fixed', reason=?, updated_at=? WHERE id=?")
             .run(`Renamed to ${path.basename(targetPath)} using the manual chapter correction.`, now, issue.id);
         await applyCoverRuleToFile(targetPath, series).catch(error => log(`[COVER APPLY WARN] ${path.basename(targetPath)}: ${error.message}`, 'WARN'));
@@ -5840,7 +6135,7 @@ async function resolveConflictInternal(id, action) {
         if (destRoot && isWithin(destRoot, sourcePath)) {
             await createRecoveryForPath(sourcePath, conflict.target_series, 'available');
         } else if (sourceRoot && isWithin(sourceRoot, sourcePath)) {
-            await fs.remove(sourcePath);
+            await createRecoveryForPath(sourcePath, conflict.target_series, 'available');
             resolveFileIssue(sourcePath);
         } else {
             throw new Error('The source file is outside both configured roots. It was not deleted. Check Settings → Test Paths.');
@@ -5901,27 +6196,61 @@ async function deleteFileIssue(id) {
     const { sourceRoot, destRoot } = getRoots();
     const fullPath = path.resolve(issue.path);
     const allowed = [sourceRoot, destRoot].filter(Boolean).some(root => isWithin(root, fullPath) && !samePath(root, fullPath));
-    if (!allowed || path.extname(fullPath).toLowerCase() !== '.cbz') throw new Error('File path failed the source/library safety check; nothing was deleted.');
-    if (await fs.pathExists(fullPath)) await fs.remove(fullPath);
-    db.prepare("UPDATE file_issues SET status='deleted', updated_at=?, reason=? WHERE id=?")
-        .run(new Date().toISOString(), 'File deleted from the Attention queue by the user.', issue.id);
-    qcDb.prepare('DELETE FROM qc_cache WHERE path=?').run(fullPath);
-    db.prepare('DELETE FROM processed_files WHERE path=?').run(fullPath);
-    db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(fullPath);
-    log(`[ATTENTION] Deleted file from disk at the user's request: ${fullPath}`, 'WARN');
-    return { success: true, message: 'The file was deleted and removed from the active Attention queue.' };
+    if (!allowed || (destRoot && isWithin(path.join(destRoot, '.panelkeeper-recovery'), fullPath)) || path.extname(fullPath).toLowerCase() !== '.cbz') throw new Error('File path failed the source/library safety check; nothing was moved.');
+    if (getPathPresence(fullPath) !== true) throw new Error('The Attention file is missing or its storage is unavailable. No file was deleted or moved.');
+    const stat = await fs.lstat(fullPath);
+    if (!stat.isFile()) throw new Error('Only regular CBZ files can be moved to Recovery. No changes were made.');
+    const { destRoot: libraryRoot } = getRoots();
+    if (!libraryRoot || getPathPresence(libraryRoot) !== true) throw new Error('The manga library/Recovery storage is unavailable. No file was deleted or moved.');
+    const series = issue.target_series || (isWithin(libraryRoot, fullPath) ? seriesNameFromPath(fullPath, libraryRoot) : '') || 'Unsorted';
+    await yieldToPipeline();
+    await waitForCoverMutations();
+    beginQcMutation();
+    try {
+        const recovered = await createRecoveryForPath(fullPath, series);
+        db.prepare("UPDATE file_issues SET status='transferred', updated_at=?, reason=? WHERE id=?")
+            .run(new Date().toISOString(), `Moved to Recovery #${recovered.id} by the user.`, issue.id);
+        qcDb.prepare('DELETE FROM qc_cache WHERE path=?').run(fullPath);
+        db.prepare('DELETE FROM processed_files WHERE path=?').run(fullPath);
+        db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(fullPath);
+        db.prepare('DELETE FROM cover_insertions WHERE archive_path=?').run(fullPath);
+        db.prepare('DELETE FROM chapter_cover_insertions WHERE archive_path=?').run(fullPath);
+        log(`[ATTENTION → RECOVERY #${recovered.id}] Moved ${fullPath}. Restore or permanently delete from Recovery.`, 'WARN');
+        return { success: true, recoveryId: recovered.id, message: 'File moved safely to Recovery. Restore or permanently delete it from the Recovery tab.' };
+    } finally {
+        endQcMutation();
+    }
+}
+
+function validateRecoveryPaths(item, { requireOriginal = true } = {}) {
+    const { sourceRoot, destRoot } = getRoots();
+    if (!destRoot) throw new Error('Configure a destination library before using Recovery.');
+    const recoveryRoot = path.resolve(destRoot, '.panelkeeper-recovery');
+    const backup = path.resolve(item.backup_path);
+    if (!isWithin(recoveryRoot, backup) || samePath(recoveryRoot, backup) || path.extname(backup).toLowerCase() !== '.cbz') {
+        throw new Error('Recovery backup path failed the safety check. Nothing was changed.');
+    }
+    if (requireOriginal) {
+        const original = path.resolve(item.original_path);
+        const allowed = [sourceRoot, destRoot].filter(Boolean).some(root => isWithin(root, original) && !samePath(root, original));
+        if (!allowed || isWithin(recoveryRoot, original) || path.extname(original).toLowerCase() !== '.cbz') {
+            throw new Error('Recovery original path is outside the configured source/library. Nothing was changed.');
+        }
+        const originalRoot = [sourceRoot, destRoot].filter(Boolean).find(root => isWithin(root, original) && !samePath(root, original));
+        if (getPathPresence(originalRoot) !== true) throw new Error('The original Downloads/Library root is unavailable. Restore was not attempted.');
+    }
+    return { backup, recoveryRoot };
 }
 
 async function restoreRecoveryItem(id) {
     const item = db.prepare("SELECT * FROM recovery_items WHERE id=? AND status='available'").get(Number(id));
     if (!item) throw new Error('Recovery item not found or already used.');
-    const { destRoot } = getRoots();
-    if (!isWithin(destRoot, item.original_path) || !isWithin(path.join(destRoot, '.panelkeeper-recovery'), item.backup_path)) {
-        throw new Error('Recovery paths failed the safety check. No files were changed.');
-    }
+    validateRecoveryPaths(item);
     const backupPresence = getPathPresence(item.backup_path);
     if (backupPresence === null) throw new Error('The Recovery storage location is not accessible or its contents cannot be verified. The record was left unchanged.');
     if (backupPresence === false) throw new Error('The recovery file is confirmed missing from disk. You can remove its stale Recovery record with Delete Permanently.');
+    const backupStat = await fs.lstat(item.backup_path);
+    if (!backupStat.isFile()) throw new Error('Recovery backup is not a regular CBZ file. Restore was not attempted.');
     await fs.ensureDir(path.dirname(item.original_path));
     let displaced = null;
     if (await fs.pathExists(item.original_path)) displaced = await createRecoveryForPath(item.original_path, item.series);
@@ -5941,6 +6270,7 @@ async function restoreRecoveryItem(id) {
 async function deleteRecoveryItem(id) {
     const item = db.prepare("SELECT * FROM recovery_items WHERE id=? AND status='available'").get(Number(id));
     if (!item) throw new Error('Recovery item not found or already removed.');
+    validateRecoveryPaths(item, { requireOriginal: false });
     const backupPresence = getPathPresence(item.backup_path);
     if (backupPresence === null) throw new Error('The Recovery storage location is not accessible or its contents cannot be verified. The record was left unchanged.');
     if (backupPresence === false) {
@@ -5948,7 +6278,10 @@ async function deleteRecoveryItem(id) {
         log(`[RECOVERY] Removed stale index record #${item.id}; its backup file was already missing.`, 'WARN');
         return { success: true };
     }
-    await fs.remove(item.backup_path);
+
+    const stat = await fs.lstat(item.backup_path);
+    if (!stat.isFile()) throw new Error('Recovery backup is not a regular CBZ file. Nothing was deleted.');
+    await fs.unlink(item.backup_path);
     db.prepare("UPDATE recovery_items SET status='deleted' WHERE id=?").run(item.id);
     log(`[RECOVERY] Permanently deleted "${path.basename(item.backup_path)}" at the user's request.`);
     return { success: true };
@@ -5978,23 +6311,54 @@ async function bulkRecoveryAction(ids, action) {
 }
 
 async function purgeExpiredRecovery() {
-    const days = Math.max(1, Math.min(365, Number(getSetting('backupRetentionDays', '14')) || 14));
-    const threshold = Date.now() - days * 24 * 60 * 60 * 1000;
-    const rows = db.prepare("SELECT * FROM recovery_items WHERE status='available'").all();
-    let count = 0;
-    for (const item of rows) {
+    if (String(getSetting('recoveryAutoExpire', 'true')) !== 'true') return { expired: 0, disabled: true };
+    const days = Number(getSetting('backupRetentionDays', '14'));
+    if (!Number.isSafeInteger(days) || days < 1 || days > 365) {
+        log('[RECOVERY] Automatic expiration skipped: retention setting must be 1 to 365 days.', 'WARN');
+        return { expired: 0, invalidSetting: true };
+    }
+    const threshold = Date.now() - days * 86400000;
+
+    const items = db.prepare("SELECT * FROM recovery_items WHERE status='available' AND created_at < ?")
+        .all(new Date(threshold).toISOString());
+    let expired = 0;
+    for (const item of items) {
         const created = Date.parse(item.created_at);
         if (!Number.isFinite(created) || created >= threshold) continue;
+        let recoveryRoot;
+        try { ({ recoveryRoot } = validateRecoveryPaths(item, { requireOriginal: false })); }
+        catch (error) {
+            log(`[RECOVERY] Skipped invalid recovery record #${item.id}: ${error.message}`, 'WARN');
+            continue;
+        }
         const presence = getPathPresence(item.backup_path);
         if (presence === null) continue;
         if (presence === true) {
-            try { await fs.remove(item.backup_path); }
-            catch (error) { log(`[RECOVERY] Could not expire ${item.backup_path}: ${error.message}`, 'WARN'); continue; }
+            try {
+                const stat = await fs.lstat(item.backup_path);
+                if (!stat.isFile()) {
+                    log(`[RECOVERY] Skipped non-regular backup file #${item.id}.`, 'WARN');
+                    continue;
+                }
+
+                const actualRoot = await fs.realpath(recoveryRoot);
+                const actualBackup = await fs.realpath(item.backup_path);
+                if (!isWithin(actualRoot, actualBackup) || samePath(actualRoot, actualBackup)) {
+                    log(`[RECOVERY] Skipped backup outside the resolved Recovery root (#${item.id}).`, 'WARN');
+                    continue;
+                }
+                await fs.unlink(item.backup_path);
+            } catch (error) {
+                log(`[RECOVERY] Could not expire backup #${item.id}: ${error.message}`, 'WARN');
+                continue;
+            }
         }
-        db.prepare("UPDATE recovery_items SET status='expired' WHERE id=?").run(item.id);
-        count++;
+
+        db.prepare("UPDATE recovery_items SET status='expired' WHERE id=? AND status='available'").run(item.id);
+        expired++;
     }
-    if (count) log(`Recovery retention: permanently removed ${count} item(s) older than ${days} days.`);
+    if (expired) log(`[RECOVERY] Retention expired ${expired} Recovery backup(s) older than ${days} days.`);
+    return { expired, days };
 }
 
 async function getPathStatus() {
@@ -6121,6 +6485,163 @@ async function scanSeries() {
     return { destinationSeries: destSeries, unmatchedSources, unmatchedSourceDetails, mappings, sourceFolders: sourceSeries.length };
 }
 
+async function inspectPipelineQcArchive(filePath) {
+    const { destRoot } = getRoots();
+    const absolute = path.resolve(filePath);
+    if (!destRoot || !isWithin(destRoot, absolute) || path.extname(absolute).toLowerCase() !== '.cbz') return null;
+    const stats = await fs.stat(absolute).catch(() => null);
+    if (!stats?.isFile()) return null;
+    const series = seriesNameFromPath(absolute, destRoot);
+    const name = path.basename(absolute);
+    let issues = [];
+    let reason = '';
+    const parsed = parseQcChapterPath(absolute, series);
+    if (!hasCorrectName(absolute, series)) {
+        issues.push('bad_name');
+        reason = `The filename does not start with the exact saved series capitalization "${series} - ".`;
+    }
+    const ignoredTerms = getEffectiveIgnoredTerms(series);
+    let stem = name.replace(/\.cbz$/i, '');
+    if (series) stem = stem.replace(new RegExp(String(series).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), ' ');
+    if (ignoredTerms.length && hasIgnoredChapterTerms(stem, ignoredTerms)) {
+        if (!issues.includes('bad_name')) issues.push('bad_name');
+        reason += ` Ignored chapter terms found: ${ignoredTerms.join(', ')}.`;
+    }
+    if (!parsed) {
+        if (!issues.includes('bad_name')) issues.push('bad_name');
+        issues.push('unparsed_chapter');
+        reason += ' No safe chapter identity could be derived.';
+    } else if (parsed.special) {
+        const destination = buildChapterDestination(path.resolve(destRoot, series), series, parsed, { persistSpecial: true });
+        if (!samePath(absolute,destination.path)) {
+            issues.push('special_needs_kavita_path');
+            reason += ` The Special should be stored as ${destination.fileName} under Specials/.`;
+        }
+    }
+    try {
+        const archive = await zip.readZipDirectory(absolute);
+        if (getComicInfoPolicy(series) !== 'leave' && archive.entries.some(item => zip.isComicInfo(item.name))) issues.push('has_xml');
+        const unsupported = unsupportedImagesInDirectory(archive);
+        if (unsupported.length) {
+            issues.push('unsupported_image_format');
+            reason += ` ${describeUnsupportedImages(unsupported)}`;
+        }
+    } catch (error) {
+        issues.push(archiveIssueKind(error) === 'unsupported_archive' ? 'unsupported_archive' : 'bad_archive');
+        reason += ` ${error.message}`;
+    }
+    issues = filterQcIssuesHandledByReviewQueues(absolute, issues);
+
+    qcDb.prepare(`INSERT INTO qc_cache (path,size,mtime,issues,reason,has_issues,scanned_at,parser_version)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET size=excluded.size,mtime=excluded.mtime,
+        issues=excluded.issues,reason=excluded.reason,has_issues=excluded.has_issues,scanned_at=excluded.scanned_at,parser_version=excluded.parser_version`)
+        .run(absolute,stats.size,Math.floor(stats.mtimeMs),JSON.stringify(issues),reason,issues.length?1:0,new Date().toISOString(),QC_ANALYSIS_VERSION);
+    const dismissed = qcDb.prepare('SELECT 1 FROM qc_dismissed WHERE path=? AND size=? AND mtime=?')
+        .get(absolute,stats.size,Math.floor(stats.mtimeMs));
+    return dismissed ? null : {series,file:name,path:absolute,issues,reason};
+}
+
+async function runPipelineQcWorker() {
+    if (pipelineQcWorkerRunning) return;
+    pipelineQcWorkerRunning = true;
+    let scanned = 0, repaired = 0, routed = 0;
+    try {
+        while (pipelineQcWorkerRequested && String(getSetting('autoQC','false')) === 'true') {
+            pipelineQcWorkerRequested = false;
+            const candidates = [...pipelineQcCandidates];
+            pipelineQcCandidates.clear();
+            const handled = new Set();
+            const duplicateDirs = new Set();
+            const pending = [];
+            const flush = async () => {
+                if (!pending.length) return;
+
+                if (String(getSetting('autoQC','false')) !== 'true') {
+                    pending.length = 0;
+                    return;
+                }
+                const batch = pending.splice(0,pending.length);
+                const actions = getAutomaticQcActions(getSetting);
+                const actionable = batch.filter(item => hasAutomaticQcActionableIssue(item.issues, actions, getComicInfoPolicy(item.series)));
+                if (!actionable.length) return;
+                const result = await fixLibraryIssues(actionable, { automaticQcActions: actions });
+                repaired += result.fixed || 0;
+                routed += (result.sentToAttention || 0) + (result.sentToConflicts || 0);
+            };
+            const inspect = async target => {
+                await yieldToPipeline();
+                if (String(getSetting('autoQC','false')) !== 'true') return;
+                const resolved = path.resolve(target);
+                if (handled.has(resolved)) return;
+                handled.add(resolved);
+                const item = await inspectPipelineQcArchive(resolved);
+                if (!item) return;
+                scanned++;
+                if (getAutomaticQcActions(getSetting).resolveDuplicates) duplicateDirs.add(path.dirname(resolved));
+                if (item.issues.length) pending.push(item);
+                if (pending.length >= 15) await flush();
+            };
+
+            for (const target of candidates) await inspect(target);
+            let cursor = '';
+            const select = qcDb.prepare(`SELECT path,issues FROM qc_cache WHERE has_issues=1 AND path>?
+                AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)
+                ORDER BY path LIMIT 100`);
+            while (String(getSetting('autoQC','false')) === 'true') {
+                await yieldToPipeline();
+                const rows = select.all(cursor);
+                if (!rows.length) break;
+                for (const row of rows) {
+                    cursor = row.path;
+                    let existingIssues = [];
+                    try { existingIssues = JSON.parse(row.issues); } catch (_) {}
+                    const actions = getAutomaticQcActions(getSetting);
+                    if (existingIssues.includes('duplicate_chapter') && actions.resolveDuplicates) {
+                        duplicateDirs.add(path.dirname(row.path));
+                    }
+                    if (handled.has(path.resolve(row.path))) continue;
+                    if (!hasAutomaticQcActionableIssue(existingIssues, actions, getComicInfoPolicy(seriesNameFromPath(row.path,getRoots().destRoot)))) continue;
+                    await inspect(row.path);
+                }
+                await flush();
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            await flush();
+            if (getAutomaticQcActions(getSetting).resolveDuplicates) {
+                for (const directory of duplicateDirs) {
+                    await yieldToPipeline();
+                    if (String(getSetting('autoQC','false')) !== 'true') break;
+                    try {
+                        const result = await collectDirectoryDuplicateGroups(directory,getRoots().destRoot,pipelineGeneration);
+                        if (result.interrupted) continue;
+                        const actions = getAutomaticQcActions(getSetting);
+                        if (!actions.resolveDuplicates) break;
+                        await processDirectoryDuplicateGroups(result.groups,{
+                            generationAtStart:pipelineGeneration,allowRenames:actions.repairNames,allowReviewRouting:actions.routeToReview
+                        });
+                    } catch (error) { log(`[PIPELINE QC DUPLICATES] ${directory}: ${error.message}`, 'WARN'); }
+                    await new Promise(resolve => setImmediate(resolve));
+                }
+            }
+        }
+        if (scanned || repaired || routed) log(`[PIPELINE QC] Checked ${scanned} changed or previously flagged chapter(s), applied ${repaired} repair(s), routed ${routed} review item(s). No full-library scan was started.`);
+    } catch (error) {
+        log(`[PIPELINE QC] Automatic pass could not complete: ${error.stack || error.message}`, 'ERROR');
+    } finally {
+        pipelineQcWorkerRunning = false;
+        if (pipelineQcWorkerRequested) setImmediate(runPipelineQcWorker);
+    }
+}
+
+function queuePipelineQcWorker() {
+    if (String(getSetting('autoQC','false')) !== 'true') {
+        pipelineQcCandidates.clear();
+        return;
+    }
+    pipelineQcWorkerRequested = true;
+    if (!pipelineQcWorkerRunning) setImmediate(runPipelineQcWorker);
+}
+
 async function runPipeline() {
     if (pipelinePromise) {
         log('Pipeline request ignored because another pipeline run is already in progress.', 'WARN');
@@ -6128,6 +6649,7 @@ async function runPipeline() {
     }
     pipelineGeneration++;
     pipelinePromise = (async () => {
+        let completedNormally = false;
         const startedAt = Date.now();
         log('Pipeline started.');
         try {
@@ -6146,20 +6668,10 @@ async function runPipeline() {
             await normalizeRootSpecialFiles();
             await refreshTouchedLibrarySeries();
 
-            const autoQcEnabled = String(getSetting('autoQC', 'false')) === 'true';
-            if (autoQcEnabled) {
-                const intervalHours = Math.max(1, Math.min(720, Number(getSetting('autoQCIntervalHours', '168')) || 168));
-                const lastRun = Date.parse(getSetting('lastAutoQC', ''));
-                const due = !Number.isFinite(lastRun) || Date.now() - lastRun >= intervalHours * 60 * 60 * 1000;
-                if (due) {
-                    startQcScan({ reason: 'scheduled automatic QC', autoFix: true, useCache: true });
-                    log(`Automatic QC was started separately in the background (due every ${intervalHours} hour(s)); the pipeline will not wait for it.`);
-                } else {
-                    log(`Automatic QC is enabled; the next full background pass is due in ${intervalHours} hour(s) from the previous pass.`);
-                }
-            } else {
-                log('Automatic QC is off. No full-library scan was started.');
+            if (String(getSetting('autoQC','false')) === 'true') {
+                log(`Automatic pipeline QC will check ${pipelineQcCandidates.size} touched chapter(s) and previously flagged QC findings after the pipeline releases its paths.`);
             }
+
             await purgeExpiredRecovery();
             const elapsed = Math.round((Date.now() - startedAt) / 1000);
             log(`Pipeline finished in ${elapsed}s.`);
@@ -6170,6 +6682,7 @@ async function runPipeline() {
                 if (result.sent) log(`Home Assistant webhook request returned HTTP ${result.status}; automation execution is not confirmed by the webhook response (test/event ID ${result.testId || 'n/a'}).`);
                 else if (!result.skipped && result.reason && !result.reason.startsWith('No Home Assistant webhook URL is configured')) log(`Webhook request not completed: ${result.reason}`, 'WARN');
             });
+            completedNormally = true;
             return { success: true, elapsedSeconds: elapsed };
         } catch (error) {
             log(`Pipeline failed: ${error.stack || error.message}`, 'ERROR');
@@ -6182,6 +6695,8 @@ async function runPipeline() {
         } finally {
             pipelinePromise = null;
             setImmediate(processCoverJobs);
+            if (completedNormally) queuePipelineQcWorker();
+            else pipelineQcCandidates.clear();
         }
     })();
     return pipelinePromise;
@@ -6199,6 +6714,7 @@ module.exports = {
     applyComicInfoPolicyToLibrary,
     scanLibraryHealth,
     startQcScan,
+    isQcScanRunning: () => Boolean(activeQcJob && activeQcJob.status === 'running'),
     resumeInterruptedQcScan,
     getQcScanStatus,
     getLatestQcScanStatus,
