@@ -17,6 +17,7 @@ const INDEX_PATH = path.join(PUBLIC_DIR, 'index.html');
 let scheduledTask = null;
 let scheduledNextRunAt = null;
 let scheduledNextRunError = '';
+let fullQcTimer = null;
 const systemTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 app.disable('x-powered-by');
@@ -42,6 +43,9 @@ function sendError(res, error, status = 500) {
 async function streamArchiveEntry(res, archivePage) {
     const stream = await manager.zip.createEntryReadStream(archivePage.archivePath, archivePage.entry);
     res.setHeader('Content-Type', manager.zip.mimeTypeForImage(archivePage.entry.name));
+    if (path.extname(archivePage.entry.name).toLowerCase() === '.svg') {
+        res.setHeader('Content-Security-Policy', 'sandbox');
+    }
     res.setHeader('Content-Length', String(archivePage.entry.uncompressedSize));
     res.setHeader('Cache-Control', 'private, no-store');
     stream.on('error', error => {
@@ -108,6 +112,20 @@ function parseSettings() {
 function saveSchedulerState(values) {
     const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
     for (const [key, value] of Object.entries(values)) stmt.run(key, value == null ? '' : String(value));
+}
+
+function checkAutomaticFullQcSchedule() {
+    try {
+        if (manager.getSetting('automaticFullQCEnabled','false') !== 'true') return;
+        if (manager.isPipelineRunning() || manager.isQcScanRunning()) return;
+        const { destRoot } = manager.getRoots();
+        if (!destRoot || !fs.existsSync(destRoot)) return;
+        const intervalHours = Math.max(1,Math.min(720,Number(manager.getSetting('autoQCIntervalHours','168')) || 168));
+        const previous = Date.parse(manager.getSetting('lastAutoQC',''));
+        if (Number.isFinite(previous) && Date.now()-previous < intervalHours*3600000) return;
+        const job = manager.startQcScan({ reason:'scheduled full QC inspection', autoFix:false, useCache:true });
+        if (!job.alreadyRunning) manager.log(`Started independent, detection-only full-library QC inspection (${intervalHours}-hour schedule).`);
+    } catch (error) { manager.log(`Automatic full QC inspection was not started: ${error.message}`, 'WARN'); }
 }
 
 function getSchedulerTimezone() {
@@ -411,6 +429,9 @@ app.post('/api/settings/schedule', (req, res) => {
     } catch (error) { sendError(res, error, 400); }
 });
 
+const { AUTO_QC_ACTION_KEYS } = require('./utils/automatic-qc-utils');
+const { unsupportedImagesInDirectory, describeUnsupportedImages } = require('./utils/image-format-utils');
+
 const notificationSettingKeys = [
     'notifyPipelineCompleted', 'notifyPipelineFailed', 'notifyPipelineNotRun', 'notifyAttention', 'notifyConflicts', 'notifyQC', 'notifyCompletedChapterMissing',
     'notifyIncludeDuration', 'notifyIncludeFolderSummary', 'notifyIncludeFailureDetails',
@@ -418,7 +439,7 @@ const notificationSettingKeys = [
 ];
 const allowedSettings = new Set([
     'sourceRoot', 'destination', 'sourceFolderMode', 'webhookUrl', 'cronSchedule', 'pipelineOrder',
-    'autoQC', 'autoQCIntervalHours', 'removeComicInfo', 'comicInfoPolicy', 'comicInfoGlobalTemplate', 'comicInfoSeriesTemplates', 'backupRetentionDays', 'logRetention', 'schedulerTimezone',
+    'autoQC', 'automaticFullQCEnabled', 'autoQCIntervalHours', ...AUTO_QC_ACTION_KEYS, 'removeComicInfo', 'comicInfoPolicy', 'comicInfoGlobalTemplate', 'comicInfoSeriesTemplates', 'backupRetentionDays', 'recoveryAutoExpire', 'logRetention', 'schedulerTimezone',
     'logFileMaxMB', 'minimumFileAgeSeconds', ...notificationSettingKeys
 ]);
 app.post('/api/settings', (req, res) => {
@@ -436,12 +457,21 @@ app.post('/api/settings', (req, res) => {
             try { new Intl.DateTimeFormat('en-US', { timeZone: value }); }
             catch (_) { return sendError(res, new Error('Enter a valid IANA time zone, such as America/New_York, or choose System local time.'), 400); }
         }
-        if (['autoQC', 'removeComicInfo', ...notificationSettingKeys].includes(key)) value = value === 'true' || value === '1' ? 'true' : 'false';
+        if (AUTO_QC_ACTION_KEYS.includes(key)) {
+            value = value.toLowerCase();
+            if (!['true', 'false', '1', '0'].includes(value)) {
+                return sendError(res, new Error('Automatic QC actions must be enabled or disabled.'), 400);
+            }
+        }
+        if (key === 'recoveryAutoExpire' && !['true', 'false', '1', '0'].includes(value.toLowerCase())) {
+            return sendError(res, new Error('Recovery auto-expiration must be enabled or disabled.'), 400);
+        }
+        if (['autoQC', 'automaticFullQCEnabled', 'recoveryAutoExpire', ...AUTO_QC_ACTION_KEYS, 'removeComicInfo', ...notificationSettingKeys].includes(key)) value = value === 'true' || value === '1' ? 'true' : 'false';
+        if (key === 'backupRetentionDays' && (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 365)) {
+            return sendError(res, new Error('Recovery retention must be from 1 to 365 whole days.'), 400);
+        }
         if (key === 'autoQCIntervalHours' && (!Number.isFinite(Number(value)) || Number(value) < 1 || Number(value) > 720)) {
             return sendError(res, new Error('Automatic QC interval must be from 1 to 720 hours.'), 400);
-        }
-        if (key === 'backupRetentionDays' && (!Number.isFinite(Number(value)) || Number(value) < 1 || Number(value) > 365)) {
-            return sendError(res, new Error('Recovery retention must be from 1 to 365 days.'), 400);
         }
         if (key === 'logRetention' && (!Number.isFinite(Number(value)) || Number(value) < 500 || Number(value) > 50000)) {
             return sendError(res, new Error('Log retention must be from 500 to 50000 records.'), 400);
@@ -458,6 +488,7 @@ app.post('/api/settings', (req, res) => {
             saveSchedulerState({ schedulePreset: inferred.preset, scheduleStartTime: inferred.startTime });
         }
         if (key === 'cronSchedule' || key === 'schedulerTimezone') refreshScheduler();
+        if (key === 'automaticFullQCEnabled' || key === 'autoQCIntervalHours') setImmediate(checkAutomaticFullQcSchedule);
         manager.log(`Settings updated: ${key}.`);
         res.json({ success: true, key, value });
     } catch (error) { sendError(res, error); }
@@ -547,7 +578,7 @@ app.post('/api/mappings', (req, res) => {
     } catch (error) { sendError(res, error, 400); }
 });
 
-app.put('/api/mappings/:id', (req, res) => {
+app.put('/api/mappings/:id', asyncRoute(async (req, res) => {
     const targetResult = manager.validateSeriesName(req.body?.target);
     if (!targetResult.valid) return sendError(res, new Error(targetResult.message), 400);
     const volumeModeProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'volumeMode') && req.body.volumeMode !== '' && req.body.volumeMode !== null && req.body.volumeMode !== undefined;
@@ -558,6 +589,18 @@ app.put('/api/mappings/:id', (req, res) => {
     try {
         const before = db.prepare('SELECT * FROM series_mappings WHERE id=?').get(Number(req.params.id));
         if (!before) return sendError(res, new Error('Mapping not found.'), 404);
+
+        if (before.target_series.toLocaleLowerCase() === targetResult.value.toLocaleLowerCase()) {
+            const { destRoot } = manager.getRoots();
+            if (destRoot && await fs.pathExists(destRoot)) {
+                const matching = (await fs.readdir(destRoot, { withFileTypes: true }))
+                    .filter(item => item.isDirectory() && item.name.toLocaleLowerCase() === targetResult.value.toLocaleLowerCase());
+                if (matching.length > 1) throw new Error('Multiple library folders differ only in capitalization. Resolve them before saving this mapping.');
+                if (matching.length === 1 && matching[0].name !== targetResult.value) {
+                    await manager.renameLibrarySeries(matching[0].name, targetResult.value);
+                }
+            }
+        }
         const result = db.prepare('UPDATE series_mappings SET target_series=? WHERE id=?').run(targetResult.value, Number(req.params.id));
         if (!result.changes) return sendError(res, new Error('Mapping not found.'), 404);
         const stillMapped = db.prepare('SELECT 1 FROM series_mappings WHERE lower(target_series)=lower(?) LIMIT 1').get(before.target_series);
@@ -571,7 +614,7 @@ app.put('/api/mappings/:id', (req, res) => {
         manager.log(`Updated mapping #${req.params.id} to "${targetResult.value}"${volumeModeProvided ? ` (volume mode: ${volumeMode})` : ''}.`);
         res.json({ success: true, volumeMode: manager.getSeriesVolumeMode(targetResult.value), ignoredTerms: manager.getSeriesIgnoredTerms(targetResult.value) });
     } catch (error) { sendError(res, error, 400); }
-});
+}));
 
 app.delete('/api/mappings/:id/sources/:sourceId', (req, res) => {
     try {
@@ -791,7 +834,30 @@ async function recheckIssueRecord(issueId) {
         return { success: true, resolved: true, message: 'File no longer exists at the recorded path.' };
     }
     try {
-        await manager.zip.readZipDirectory(issue.path);
+        const inspectedArchive = await manager.zip.readZipDirectory(issue.path);
+        if (issue.kind === 'unsupported_image_format') {
+            const pages = unsupportedImagesInDirectory(inspectedArchive);
+            if (pages.length) {
+                const reason = describeUnsupportedImages(pages);
+                db.prepare('UPDATE file_issues SET updated_at=?, reason=? WHERE id=?')
+                    .run(new Date().toISOString(), reason, issue.id);
+                return { success: true, resolved: false, message: reason };
+            }
+            db.prepare("UPDATE file_issues SET status='resolved', updated_at=?, reason=? WHERE id=?")
+                .run(new Date().toISOString(), 'No recognized unsupported image extensions remain in the CBZ.', issue.id);
+
+            const cached = qcDb.prepare('SELECT issues FROM qc_cache WHERE path=?').get(path.resolve(issue.path));
+            if (cached) {
+                let previous = [];
+                try { previous = JSON.parse(cached.issues || '[]'); } catch (_) {}
+                const remaining = previous.filter(kind => kind !== 'unsupported_image_format');
+                qcDb.prepare('UPDATE qc_cache SET issues=?, has_issues=?, reason=?, parser_version=0 WHERE path=?')
+                    .run(JSON.stringify(remaining), remaining.length ? 1 : 0,
+                        remaining.length ? 'Other QC findings remain; run QC to refresh their descriptions.' : '', path.resolve(issue.path));
+            }
+            manager.log(`Unsupported image format warning cleared on recheck for ${path.basename(issue.path)}.`);
+            return { success: true, resolved: true, message: 'Unsupported image formats are no longer detected. The archive was not modified by PanelKeeper.' };
+        }
         if (issue.kind === 'xml_cleanup_failed') {
             try {
                 const result = await manager.applyComicInfoPolicyToReviewFile(issue.path, issue.target_series || '');
@@ -1271,12 +1337,18 @@ const server = app.listen(PORT, () => {
         if (manager.resumeChapterCoverJobs()) manager.log('Resumed pending generated chapter-cover updates from the saved queue.');
         if (manager.resumeKavitaAutoCoverBulkJobs()) manager.log('Resumed pending Kavita Auto Cover bulk operation.');
         refreshScheduler();
+        if (!fullQcTimer) {
+            fullQcTimer = setInterval(checkAutomaticFullQcSchedule,60_000);
+            fullQcTimer.unref();
+        }
+        setImmediate(checkAutomaticFullQcSchedule);
     });
 });
 
 function shutdown(signal) {
     manager.log(`Received ${signal}; shutting down gracefully.`);
     if (scheduledTask) scheduledTask.stop();
+    if (fullQcTimer) clearInterval(fullQcTimer);
     server.close(() => {
         try { db.close(); } catch (_) {}
         process.exit(0);
