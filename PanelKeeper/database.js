@@ -402,16 +402,23 @@ const defaultSettings = {
     notifyIncludeTestId: 'true',
     pipelineOrder: JSON.stringify(['move', 'remove_xml']),
     autoQC: 'false',
+    automaticFullQCEnabled: 'false',
     autoQCIntervalHours: '168',
     comicInfoPolicy: 'leave',
     removeComicInfo: 'false',
     comicInfoGlobalTemplate: '',
     comicInfoSeriesTemplates: '{}',
+
     backupRetentionDays: '14',
+
+    recoveryAutoExpire: 'true',
     minimumFileAgeSeconds: '120',
     logRetention: '5000',
     logFileMaxMB: '2'
 };
+
+const { DEFAULT_AUTO_QC_ACTION_SETTINGS } = require('./utils/automatic-qc-utils');
+Object.assign(defaultSettings, DEFAULT_AUTO_QC_ACTION_SETTINGS);
 
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 const initializeDefaults = db.transaction(() => {
