@@ -14,6 +14,7 @@ const MAX_EOCD_SEARCH = 22 + 0xffff;
 
 const MAX_CENTRAL_DIRECTORY_BYTES = 128 * 1024 * 1024;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp', '.tif', '.tiff']);
+const { isRecognizedImageExtension, SUPPORTED_PAGE_EXTENSIONS } = require('./image-format-utils');
 
 function zipError(message, code = 'ZIP_FORMAT_ERROR') {
     const error = new Error(message);
@@ -147,9 +148,9 @@ function isComicInfo(entryName) {
     return !normalized.endsWith('/') && path.posix.basename(normalized).toLowerCase() === 'comicinfo.xml';
 }
 
-function imageEntries(directory, { includeManaged = false } = {}) {
+function imageEntries(directory, { includeManaged = false, includeUnsupported = false } = {}) {
     return directory.entries
-        .filter(entry => !entry.isDirectory && !entry.encrypted && IMAGE_EXTENSIONS.has(path.posix.extname(entry.name).toLowerCase()) && (includeManaged || !isManagedFirstImage(entry.name)))
+        .filter(entry => !entry.isDirectory && !entry.encrypted && !entry.name.replace(/\\/g, '/').toLowerCase().split('/').includes('__macosx') && (IMAGE_EXTENSIONS.has(path.posix.extname(entry.name).toLowerCase()) || (includeUnsupported && isRecognizedImageExtension(path.posix.extname(entry.name)))) && (includeManaged || !isManagedFirstImage(entry.name)))
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
@@ -763,7 +764,7 @@ async function deleteEntryInPlace(filePath, entryIndex) {
 async function reorderImageEntriesInPlace(filePath, orderedEntryIndices) {
     if (!Array.isArray(orderedEntryIndices)) throw zipError('A page order list is required.');
     const directory = await readZipDirectory(filePath);
-    const pages = imageEntries(directory);
+    const pages = imageEntries(directory, { includeUnsupported: true });
     const expected = new Set(pages.map(entry => entry.index));
     const order = orderedEntryIndices.map(Number);
     if (order.length !== pages.length || new Set(order).size !== order.length || order.some(index => !expected.has(index))) {
@@ -917,6 +918,8 @@ function mimeTypeForImage(name) {
         case '.bmp': return 'image/bmp';
         case '.tif':
         case '.tiff': return 'image/tiff';
+        case '.svg': return 'image/svg+xml';
+        case '.ico': return 'image/x-icon';
         default: return 'application/octet-stream';
     }
 }
