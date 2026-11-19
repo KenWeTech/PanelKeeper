@@ -1,6 +1,6 @@
 {
   "name": "PanelKeeper",
-  "version": "1.10.31",
+  "version": "1.10.39",
   "description": "PanelKeeper is a self-hosted Manga Library Manager for organizing CBZ chapters, managing metadata and covers, automating imports, and maintaining manga collections with inventory, quality control, and recovery tools.",
   "main": "server.js",
   "scripts": {
