@@ -193,6 +193,15 @@
         .queue-toolbar > input[type=search] { flex:1 1 260px; }
         .queue-toolbar select { width:auto; min-width:160px; }
 
+        .balanced-filter-toolbar > input[type="search"] { flex:4 1 450px; min-width:min(100%, 260px); }
+        .balanced-filter-toolbar > select:is(#qcSeriesFilter, #issueSeriesFilter) { flex:1.15 1 205px; width:205px; min-width:165px; max-width:285px; }
+        .balanced-filter-toolbar > select:is(#qcIssueFilter, #issueKindFilter) { flex:0 1 190px; width:190px; min-width:155px; max-width:210px; }
+        .balanced-filter-toolbar > select:is(#qcPageSize, #issuePageSize) { flex:0 0 135px; width:135px; min-width:125px; }
+        @media (max-width:650px) {
+            .balanced-filter-toolbar > input[type="search"] { flex-basis:100%; }
+            .balanced-filter-toolbar > select:is(#qcSeriesFilter, #issueSeriesFilter) { flex:1 1 200px; }
+        }
+
         .queue-toolbar-standard { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,250px) minmax(145px,175px); align-items:center; gap:9px; margin:12px 0; }
         .queue-toolbar-standard > input[type=search],
         .queue-toolbar-standard > select { width:100%; min-width:0; min-height:42px; flex:unset; }
@@ -315,18 +324,18 @@
         .compare-legend { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
         .compare-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 1px; background: var(--border); }
         .compare-side { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #080b10; }
-        .compare-side-head { padding: 10px 13px; background: #151d28; border-bottom: 1px solid var(--border); min-height: 67px; }
-        .compare-side-head strong { display: block; overflow-wrap: anywhere; }
-        .compare-side-head small { display: block; margin-top: 2px; overflow-wrap:anywhere; }
-        .compare-side-head { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+        .compare-side-head { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 13px; background:#151d28; border-bottom:1px solid var(--border); height:96px; flex:0 0 96px; overflow:hidden; }
+        .compare-side-head strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; line-height:1.3; }
+        .compare-side-head small { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-top:3px; overflow-wrap:anywhere; line-height:1.35; }
         .compare-side-head > div:first-child { min-width:0; flex:1; }
         .compare-jumps { display:flex; gap:5px; flex:0 0 auto; }
-        .compare-jumps button { padding:5px 7px; font-size:11px; min-height:32px; }
-        .compare-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 10px; }
+        .compare-jumps button { padding:5px 7px; font-size:11px; min-height:32px; white-space:nowrap; }
+        .compare-scroll { position:relative; flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; padding:10px; }
         .page-card { max-width: none; width:100%; margin: 0 auto 12px; padding: 6px; border: 1px solid #273444; border-radius: 6px; background: #10151d; }
         .page-card img { display: block; width: 100%; height: auto; min-height: 80px; object-fit: contain; background: #07090d; border-radius: 4px; }
         .page-label { padding: 5px 2px 1px; font-size: 10px; color: #7f8c9c; overflow-wrap: anywhere; }
         .compare-loading { text-align: center; padding: 30px 15px; color: var(--muted); }
+        .compare-footer .footer-actions { margin-left:auto; }
         .compare-footer { flex:0 0 auto; padding: 12px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: #121923; }
         .footer-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
         .busy { opacity: .72; pointer-events: none; }
@@ -399,7 +408,7 @@
             .app-dialog-message { font-size:16px; }
             .app-dialog-actions { gap:12px; }
             .app-dialog-actions button { min-width:0; flex:1 1 0; min-height:50px; font-size:15px; }
-            .compare-side-head { padding: 8px; font-size: 11px; min-height:76px; }
+            .compare-side-head { padding:8px; font-size:11px; height:110px; flex-basis:110px; }
             .compare-jumps { flex-direction:column; }
             .compare-jumps button { min-height:28px; padding:4px 6px; font-size:10px; }
             .compare-scroll { padding: 4px; }
@@ -612,6 +621,14 @@
             border-color: #4e3a2e;
             border-radius: 6px;
         }
+
+        .auto-qc-panel { background:#1c1511; border-color:#4e3a2e; border-radius:6px; }
+        .auto-qc-panel .auto-qc-master { background:#1c1511; }
+        .auto-qc-details { border-top-color:#4e3a2e; }
+        .auto-qc-details > summary { color:#e0d0bd; }
+        .auto-qc-details > summary:hover { background:#30231c; }
+        .auto-qc-content { background:#17120f; border-top-color:#4e3a2e; }
+
         .work-row { box-shadow: 2px 3px 0 rgba(0,0,0,.2); }
         table { border-color: #49372c; }
         th, td { border-bottom-color: #49372c; }
@@ -770,7 +787,7 @@
             <div class="card">
                 <div class="section-title"><div><h2>Chapter Conflict Manager</h2><p class="muted">Review incoming CBZ files that match an existing chapter. Compare both versions, choose which copy to keep, or send the pair to Files Needing Attention. Replaced files are preserved in Recovery.</p></div><button class="secondary small-button" onclick="loadConflicts(0)">Refresh</button></div>
                 <div class="queue-toolbar queue-toolbar-standard">
-                    <input id="conflictSearch" type="search" placeholder="Search text or punctuation · # = one digit (e.g. Ch ## - )" autocomplete="off">
+                    <input id="conflictSearch" type="search" placeholder="Search text or punctuation · # = one digit (e.g. Chapter ## - )" autocomplete="off">
                     <select id="conflictSeriesFilter"><option value="">All series</option></select>
                     <select id="conflictPageSize" aria-label="Conflicts per page"><option value="25">25 per page</option><option value="50">50 per page</option><option value="100" selected>100 per page</option><option value="250">250 per page</option></select>
                 </div>
@@ -791,16 +808,23 @@
         <section id="attention" class="view">
             <div class="card">
                 <div class="section-title"><div><h2>Files Needing Attention</h2><p class="muted">Files that could not be processed safely appear here. Correct chapter details, retry processing, dismiss the review record, or move the CBZ to Recovery. Permanent deletion is managed through Recovery, including its optional age-based expiration.</p></div><button class="secondary small-button" onclick="loadIssues(0)">Refresh</button></div>
-                <div class="queue-toolbar queue-toolbar-standard"><input id="issueSearch" type="search" placeholder="Search text or punctuation · # = one digit" autocomplete="off"><select id="issueSeriesFilter" aria-label="Filter Attention by series"><option value="">All series</option></select><select id="issuePageSize" aria-label="Attention rows per page"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></div>
+                <div class="queue-toolbar balanced-filter-toolbar">
+                    <input id="issueSearch" type="search" placeholder="Search text or punctuation · # = one digit (e.g. Chapter ## - )" autocomplete="off">
+                    <select id="issueSeriesFilter" aria-label="Filter Attention by series"><option value="">All series</option></select>
+                    <select id="issueKindFilter" aria-label="Filter Attention by issue type"><option value="">All issue types</option><option value="__jxl__">JXL images</option></select>
+                    <select id="issuePageSize" aria-label="Attention rows per page"><option>25</option><option selected>50</option><option>100</option><option>250</option></select>
+                </div>
                 <div class="queue-actions">
                     <label><input class="queue-check" type="checkbox" id="issueSelectPage" onchange="toggleIssuePage(this)"> Select this page</label>
                     <label><input class="queue-check" type="checkbox" id="issueAllFiltered" onchange="toggleIssueAllFiltered(this)"> Apply to all filtered results</label>
-                    <button class="good small-button" onclick="bulkApplyIssueChapterNames()">Apply Entered Names to Selected</button>
+                    <button class="good small-button" onclick="bulkApplyIssueChapterNames()">Rename Selected</button>
+                    <button class="secondary small-button" onclick="startJxlConversion(true)">Convert Selected</button>
                     <button class="secondary small-button" onclick="bulkAttention('recheck')">Recheck Selected</button>
                     <button class="ghost small-button" onclick="bulkAttention('dismiss')">Dismiss Selected</button>
                     <button class="danger small-button" onclick="bulkAttention('delete')">Move Selected to Recovery</button>
                     <span id="issueSelectionSummary" class="queue-count">0 selected</span>
                 </div>
+                <div id="jxlConversionProgress" class="notice" style="display:none" role="status" aria-live="polite"><span id="jxlConversionProgressText"></span> <button class="ghost small-button" id="jxlConversionCancel" onclick="cancelJxlConversion()" style="margin-left:8px">Cancel after current CBZ</button><button class="secondary small-button" id="jxlConversionDismiss" onclick="dismissJxlConversion()" style="margin-left:8px;display:none">Dismiss</button></div>
                 <div id="issueFilterSummary" class="muted" style="margin:10px 0">Loading review items…</div>
                 <div id="issueList" class="work-list"><div class="empty">Loading review items…</div></div>
                 <div class="pagination"><span id="issuePageSummary" class="muted">Page 1</span><div class="right"><button id="issuePrev" class="secondary small-button" onclick="changeQueuePage('issues',-1)">Previous</button><div id="issuePageNumbers" class="page-number-list" aria-label="Attention result pages"></div><label class="page-jump" for="issuePageJump">Go to <input id="issuePageJump" type="number" min="1" value="1" aria-label="Attention page number"><span id="issuePageCount">/ 1</span><button class="secondary small-button" onclick="jumpQueuePage('issues')">Go</button></label><button id="issueNext" class="secondary small-button" onclick="changeQueuePage('issues',1)">Next</button></div></div>
@@ -810,7 +834,7 @@
         <section id="recovery" class="view">
             <div class="card">
                 <div class="section-title"><div><h2>Recovery</h2><p class="muted">Browse previous chapter versions and files removed during library maintenance or from Attention. Restore downloads to their original source or chapters to the library. Restore items here, delete them permanently, or let the optional Recovery retention setting expire old backups after a pipeline run.</p></div><button class="secondary small-button" onclick="loadRecovery(0)">Refresh</button></div>
-                <div class="queue-toolbar queue-toolbar-standard"><input id="recoverySearch" type="search" placeholder="Search text or punctuation · # = one digit" autocomplete="off"><select id="recoverySeriesFilter" aria-label="Filter Recovery by series"><option value="">All series</option></select><select id="recoveryPageSize" aria-label="Recovery rows per page"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="250">250</option></select></div>
+                <div class="queue-toolbar queue-toolbar-standard"><input id="recoverySearch" type="search" placeholder="Search text or punctuation · # = one digit (e.g. Chapter ## - )" autocomplete="off"><select id="recoverySeriesFilter" aria-label="Filter Recovery by series"><option value="">All series</option></select><select id="recoveryPageSize" aria-label="Recovery rows per page"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="250">250</option></select></div>
                 <div class="queue-actions">
                     <label><input class="queue-check" type="checkbox" id="recoverySelectPage" onchange="toggleRecoveryPage(this)"> Select this page</label>
                     <label><input class="queue-check" type="checkbox" id="recoveryAllFiltered"> Apply to all filtered results</label>
@@ -846,8 +870,8 @@
                 </div>
             </div>
             <div class="card">
-                <div class="section-title"><div><h2>Global Chapter Filename Ignore Rules</h2><p class="muted">These rules apply to every manga and mapped source folder. Per-series rules are stored separately in the mapping form below. This editor shows and changes global rules only.</p></div></div>
-                <div class="field"><label for="globalIgnoredTerms">Global words / phrases (applies to all manga)</label><textarea id="globalIgnoredTerms" rows="5" placeholder="eng-li&#10;translated by Example Team&#10;digital release"></textarea><div class="field-help">To limit a term to one manga, remove it here and add it to that manga’s per-series rules in the mapping form. Enter one word or phrase per line. Matching is case-insensitive and uses complete words or phrases, not partial substrings. These terms are removed before chapter parsing and checked by QC so existing filenames can be reviewed. Saving a changed list marks cached QC results and Library Manager inventory stale across the library; run a full QC scan and refresh the inventory afterwards.</div></div>
+                <div class="section-title"><div><h2>Global Chapter Filename Ignore Rules</h2><p class="muted">Global rules apply when parsing incoming downloads for every mapped manga. You can set per-series rules when creating a mapping or later through Edit Mapping. Both lists also participate in library QC checks.</p></div></div>
+                <div class="field"><label for="globalIgnoredTerms">Global words / phrases (applies to all manga)</label><textarea id="globalIgnoredTerms" rows="5" placeholder="eng-li&#10;translated by Example Team&#10;digital release"></textarea><div class="field-help">To limit a term to one manga, remove it here and add it to that manga’s per-series rules in the mapping form. Enter one word or phrase per line. Matching is case-insensitive and uses complete words or phrases, not partial substrings. These terms are removed when parsing incoming downloads. QC also detects them in existing library filenames; automatic library renaming is controlled separately under QC Scanner → Configure Automatic QC. Saving changed rules marks cached QC results and library inventory stale; scan again to refresh findings.</div></div>
                 <div class="toolbar"><button type="button" onclick="saveGlobalIgnoredTerms()">Save Global Ignore Rules</button><span id="globalIgnoredTermsStatus" class="muted" aria-live="polite"></span></div>
             </div>
             <div class="card">
@@ -886,19 +910,21 @@
                 <div class="auto-qc-panel">
                     <div class="toggle-row auto-qc-master">
                         <input id="autoQcToggle" type="checkbox" onchange="toggleAutoQC()">
-                        <div><label for="autoQcToggle">Run Automatic QC during pipeline</label><div class="field-help">After processing new downloads, inspect those chapters and revisit existing unresolved QC findings. Apply only the actions enabled below. This does not start a full-library scan; the scheduled full QC in Settings only reports findings.</div></div>
+                        <div><label for="autoQcToggle">Run Automatic QC during pipeline</label><div class="field-help">After a download pipeline run or when resolving a conflict originating from Downloads, check the accepted chapters and apply the selected actions. Previously flagged QC findings are also revisited after pipeline runs. The separate full-library QC scan only reports issues.</div></div>
                     </div>
                     <details id="autoQCConfiguration" class="auto-qc-details">
                         <summary>Configure Automatic QC</summary>
                         <div class="auto-qc-content">
-                            <p class="field-help auto-qc-description">Choose what the post-pipeline automatic QC pass may do. Each switch saves immediately. Manual <strong>Repair Selected Issues</strong>, incoming-download processing, and explicitly requested metadata/cover actions are unaffected. You can configure these options even while automatic QC is turned off.</p>
+                            <p class="field-help auto-qc-description">Choose which actions Automatic QC may perform after processing downloads or resolving a conflict from Downloads. Changes save immediately. Manual repairs and the scheduled Full QC scan use their own controls.</p>
                             <div class="settings-grid" style="gap:9px">
                             <div class="toggle-row"><input id="autoQCRepairNames" type="checkbox" onchange="toggleAutoQcAction('autoQCRepairNames')"><div><label for="autoQCRepairNames">Rename chapter files</label><div class="field-help">Automatically normalize safe chapter filenames. Turning this off also prevents automatic Specials renames and duplicate-copy filename cleanup.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCApplyGlobalIgnoresToLibrary" type="checkbox" onchange="toggleAutoQcAction('autoQCApplyGlobalIgnoresToLibrary')"><div><label for="autoQCApplyGlobalIgnoresToLibrary">Apply global ignore rules to existing library filenames</label><div class="field-help">Allow Automatic QC to remove matching global ignore text when renaming library chapters. Turn off to keep global rules for incoming downloads without applying them to library filename renames. Requires Rename chapter files above.</div></div></div>
                             <div class="toggle-row"><input id="autoQCOrganizeSpecials" type="checkbox" onchange="toggleAutoQcAction('autoQCOrganizeSpecials')"><div><label for="autoQCOrganizeSpecials">Organize Specials and SP## names</label><div class="field-help">Move and number Specials in the Kavita-compatible Specials folder. Requires automatic renaming above.</div></div></div>
                             <div class="toggle-row"><input id="autoQCApplyComicInfo" type="checkbox" onchange="toggleAutoQcAction('autoQCApplyComicInfo')"><div><label for="autoQCApplyComicInfo">Apply ComicInfo policies</label><div class="field-help">Apply the separately selected Leave alone / Update / Remove / Replace / Upgrade policy during the pipeline QC pass. Leave alone never changes metadata.</div></div></div>
                             <div class="toggle-row"><input id="autoQCResolveDuplicates" type="checkbox" onchange="toggleAutoQcAction('autoQCResolveDuplicates')"><div><label for="autoQCResolveDuplicates">Resolve duplicate chapters</label><div class="field-help">Move automatic duplicate losers into Recovery. If disabled, duplicate chapter candidates remain visible in QC without moving files.</div></div></div>
                             <div class="toggle-row"><input id="autoQCRouteToReview" type="checkbox" onchange="toggleAutoQcAction('autoQCRouteToReview')"><div><label for="autoQCRouteToReview">Route unresolved issues to review</label><div class="field-help">Send invalid archives, unparseable filenames, and collisions to Attention or Conflicts for review. Disabling keeps findings in QC.</div></div></div>
-                            <div class="toggle-row"><input id="autoQCRouteUnsupportedImages" type="checkbox" onchange="toggleAutoQcAction('autoQCRouteUnsupportedImages')"><div><label for="autoQCRouteUnsupportedImages">Send unsupported image formats to Attention</label><div class="field-help">Optional (off by default). During pipeline automatic QC, queue CBZs containing recognized unsupported image types such as JPEG XL (.jxl), HEIC, BMP or TIFF for manual review. QC always detects these pages, even when routing is off. Files remain in place; no conversion occurs.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCConvertJxl" type="checkbox" onchange="toggleAutoQcAction('autoQCConvertJxl')"><div><label for="autoQCConvertJxl">Automatically convert JXL pages</label><div class="field-help">Convert JXL pages in new or accepted chapters to lossless WebP, or PNG when needed. Other pages are preserved, and a copy of the original CBZ is saved in Recovery before replacement. Some HDR and color information may not be preserved.</div></div></div>
+                            <div class="toggle-row"><input id="autoQCRouteUnsupportedImages" type="checkbox" onchange="toggleAutoQcAction('autoQCRouteUnsupportedImages')"><div><label for="autoQCRouteUnsupportedImages">Send unsupported image formats to Attention</label><div class="field-help">Add CBZs with unsupported image pages (such as JXL, SVG, ICO, or HEIC) to Attention. When JXL conversion is enabled, it runs first; any unsupported pages still remaining are flagged for review.</div></div></div>
                             </div>
                             <div id="autoQCActionStatus" class="field-help" role="status" aria-live="polite" style="margin-top:10px">Automatic QC actions will be loaded from saved settings.</div>
                         </div>
@@ -909,7 +935,7 @@
                     <div id="qcProgressText" class="muted" aria-live="polite">Checking previous QC activity…</div>
                 </div>
                 <div id="qcResults" style="display:none; margin-top:18px">
-                    <div class="queue-toolbar" style="margin-bottom:12px">
+                    <div class="queue-toolbar balanced-filter-toolbar" style="margin-bottom:12px">
                         <input id="qcSearch" type="search" placeholder="Filter text or punctuation · # = one digit (e.g. Chapter ## - )" oninput="qcPage=0;renderQC()">
                         <select id="qcSeriesFilter" aria-label="Filter QC by series"><option value="">All series</option></select>
                         <select id="qcIssueFilter" aria-label="Filter QC by issue type">
@@ -926,7 +952,10 @@
                             <option value="move_failed">Move failed</option>
                         </select>
                         <select id="qcPageSize" aria-label="QC rows per page" onchange="qcPage=0;renderQC()"><option value="25">25 per page</option><option value="50" selected>50 per page</option><option value="100">100 per page</option><option value="250">250 per page</option></select>
-                        <button id="fixQcButton" class="good" onclick="processSelected()">Repair Selected Issues</button><button id="dismissQcBulkButton" class="secondary" onclick="bulkDismissQcIssues()" disabled>Not an Issue for Selected</button>
+                    </div>
+                    <div class="queue-actions" style="margin:0 0 12px">
+                        <button id="fixQcButton" class="good" onclick="processSelected()">Repair Selected Issues</button>
+                        <button id="dismissQcBulkButton" class="secondary" onclick="bulkDismissQcIssues()" disabled>Not an Issue for Selected</button>
                     </div>
                     <div id="qcSummary" class="muted" style="margin-bottom:9px"></div>
                     <div id="qcResultsRefreshNotice" class="notice warn" style="display:none">QC has finished while this page was open. Your current selections and editing state were left untouched. <button class="secondary small-button" style="margin-left:8px" onclick="refreshQCResults()">Refresh QC Results</button></div>
@@ -979,6 +1008,7 @@
                         </div>
                         <div class="field"><label for="libraryNotes">Manga notes</label><textarea id="libraryNotes" rows="2" placeholder="Optional notes, release status, source details…"></textarea><button class="secondary small-button" onclick="saveLibraryNotes()">Save Notes</button></div>
                         <div class="section-title"><div><h3 style="margin:0">Chapter Inventory</h3><p class="muted" id="libraryChapterSummary">Loading chapters…</p></div><div class="toolbar"><select id="libraryChapterKindFilter" aria-label="Filter chapter inventory"><option value="all">All CBZ files</option><option value="chapters">Regular chapters</option><option value="specials">Specials</option><option value="volume-files">Whole-volume files</option><option value="volume-chapters">Volume-assigned chapters</option><option value="unparsed">Unparsed filenames</option><option value="duplicates">Duplicate chapter IDs</option></select><select id="libraryChapterPageSize" aria-label="Chapters per page"><option value="25">25 per page</option><option value="50" selected>50 per page</option><option value="100">100 per page</option><option value="250">250 per page</option></select></div></div>
+                        <div class="pagination" style="margin:8px 0 14px"><span id="libraryChapterPageSummaryTop" class="muted"></span><div class="right"><button class="secondary small-button" id="libraryChapterPrevTop" onclick="changeLibraryChapterPage(-1)">Previous</button><div id="libraryChapterPageNumbersTop" class="page-number-list" aria-label="Chapter inventory pages (top)"></div><label class="page-jump" for="libraryChapterPageJumpTop">Go to <input id="libraryChapterPageJumpTop" type="number" min="1" value="1" aria-label="Chapter inventory page (top)"><span id="libraryChapterPageCountTop">/ 1</span><button class="secondary small-button" onclick="jumpLibraryChapterPage('top')">Go</button></label><button class="secondary small-button" id="libraryChapterNextTop" onclick="changeLibraryChapterPage(1)">Next</button></div></div>
                         <div id="libraryChapterList" class="library-chapter-list"><div class="empty">Select a manga to view its chapters.</div></div>
                         <div class="pagination"><span id="libraryChapterPageSummary" class="muted"></span><div class="right"><button class="secondary small-button" id="libraryChapterPrev" onclick="changeLibraryChapterPage(-1)">Previous</button><div id="libraryChapterPageNumbers" class="page-number-list" aria-label="Chapter inventory pages"></div><label class="page-jump" for="libraryChapterPageJump">Go to <input id="libraryChapterPageJump" type="number" min="1" value="1" aria-label="Chapter inventory page"><span id="libraryChapterPageCount">/ 1</span><button class="secondary small-button" onclick="jumpLibraryChapterPage()">Go</button></label><button class="secondary small-button" id="libraryChapterNext" onclick="changeLibraryChapterPage(1)">Next</button></div></div>
                     </div>
@@ -1077,8 +1107,18 @@
 
         <section id="comicinfo" class="view">
             <div class="card">
-                <div class="section-title"><div><h2>ComicInfo Metadata Policy</h2><p class="muted">Choose the library-wide default for handling ComicInfo.xml in incoming CBZ files, scheduled maintenance, and QC repairs.</p></div></div>
-                <div class="field comicinfo-policy-field"><label for="comicInfoPolicySelect">Saved ComicInfo policy</label><select id="comicInfoPolicySelect"><option value="leave">Leave alone · keep existing metadata unchanged</option><option value="update">Update · synchronize series and chapter identity fields</option><option value="remove">Remove · delete ComicInfo.xml from each processed CBZ</option><option value="replace">Replace · write the saved template for each chapter</option><option value="upgrade">Upgrade · add missing fields and preserve existing metadata</option></select><div class="field-help"><strong>Leave alone</strong> keeps existing ComicInfo.xml files unchanged. It is useful when another application manages chapter metadata. <strong>Update</strong> synchronizes Series / SeriesSort and parsed chapter identity (Number, Title, Volume, and Special format), while preserving other metadata; it does not create a missing XML file. <strong>Remove</strong> deletes ComicInfo.xml from each CBZ that contains it. <strong>Replace</strong> writes the saved global or manga template, with chapter placeholders resolved for each file. <strong>Upgrade</strong> fills missing template fields without replacing existing values. Replace and Upgrade require a saved template. Saving this policy sets the default for future incoming files, scheduled metadata maintenance, and QC repairs; it does not immediately rewrite existing chapters. Use the manga-level Apply action below to run the currently selected policy on one manga. Library Manager renames continue to refresh chapter identity metadata as part of the rename operation.</div></div>
+                <div class="section-title"><div><h2>ComicInfo Metadata Policy</h2><p class="muted">Choose the default ComicInfo.xml handling for incoming CBZ files and enabled Automatic QC metadata actions.</p></div></div>
+                <div class="field comicinfo-policy-field"><label for="comicInfoPolicySelect">Saved ComicInfo policy</label><select id="comicInfoPolicySelect"><option value="leave">Leave alone · keep existing metadata unchanged</option><option value="update">Update · synchronize series and chapter identity fields</option><option value="remove">Remove · delete ComicInfo.xml from each processed CBZ</option><option value="replace">Replace · write the saved template for each chapter</option><option value="upgrade">Upgrade · add missing fields and preserve existing metadata</option></select><div class="field-help" style="margin-top:8px">The saved policy controls metadata handling for incoming chapters and applicable QC/maintenance actions. Changing it does not immediately edit your existing library.</div>
+                    <details class="optional-integration-details" style="margin-top:10px"><summary><strong>What each policy does</strong></summary>
+                        <div class="field-help" style="display:grid;gap:8px;margin-top:9px">
+                            <div><strong>Leave alone (default)</strong> — Preserve existing ComicInfo.xml without changes.</div>
+                            <div><strong>Update</strong> — Update existing Series, SeriesSort, Number, Title, Volume and Special identity fields; preserve unrelated metadata. Does not create missing XML.</div>
+                            <div><strong>Remove</strong> — Delete ComicInfo.xml from processed CBZs.</div>
+                            <div><strong>Replace</strong> — Write the selected global or manga template, resolving chapter placeholders.</div>
+                            <div><strong>Upgrade</strong> — Fill missing template fields without overwriting populated values.</div>
+                        </div>
+                        <p class="field-help" style="margin-top:10px">Replace and Upgrade require a saved template. Use the one-time action under <strong>ComicInfo Files</strong> to apply a chosen policy to an existing manga without changing this saved default.</p>
+                    </details></div>
                 <div class="toolbar"><button type="button" onclick="saveComicInfoPolicy()">Save ComicInfo Policy</button><span id="comicInfoPolicyStatus" class="muted" aria-live="polite"></span></div>
             </div>
 
@@ -1089,6 +1129,7 @@
                     <div class="field"><label for="comicInfoArchiveSelect">Preview / edit chapter CBZ</label><select id="comicInfoArchiveSelect"><option value="">Choose a manga first</option></select><div class="field-help">Includes chapters in nested folders such as Specials. Change this selection to preview a different chapter.</div></div>
                 </div>
                 <div id="comicInfoChapterContext" class="notice" style="display:none" aria-live="polite"></div>
+                <div class="field" style="margin-top:12px"><label for="comicInfoOneTimePolicy">Apply a policy to this manga once</label><div class="toolbar" style="align-items:stretch"><select id="comicInfoOneTimePolicy" style="width:auto;min-width:190px;max-width:100%"><option value="leave">Leave alone</option><option value="update">Update</option><option value="remove">Remove</option><option value="replace">Replace</option><option value="upgrade">Upgrade</option></select><button type="button" class="secondary" onclick="applyComicInfoPolicyToSeries()">Apply selected ComicInfo policy to this manga (including Specials)</button></div><div class="field-help">Runs once for the selected manga. Does not change the saved library-wide policy or create a permanent manga-specific policy.</div><div id="comicInfoApplyStatus" class="field-help" aria-live="polite"></div></div>
             </div>
 
             <div class="card">
@@ -1109,8 +1150,7 @@
                     <p class="field-help">Example: <code>&lt;Number&gt;{{ChapterNumber}}&lt;/Number&gt;</code>, <code>&lt;Title&gt;{{ChapterTitle}}&lt;/Title&gt;</code>, <code>&lt;Format&gt;{{Format}}&lt;/Format&gt;</code>. ChapterTitle is blank if the filename has no parsed title. Format is <code>Special</code> for a parsed Special and blank otherwise. Unknown / unavailable values become empty text, not unresolved placeholders.</p>
                 </div>
                 <div class="toolbar" style="margin-top:12px"><button type="button" class="secondary" onclick="useSelectedComicInfoAsTemplate()">Use selected CBZ as template source</button><button type="button" class="secondary" onclick="fetchComicInfoKavitaMetadata()">Fetch Kavita Metadata</button><button type="button" class="secondary" onclick="previewComicInfoTemplate()">Preview Template As Written</button><button type="button" onclick="previewComicInfoTemplateForChapter()">Preview for Selected Chapter</button><span id="comicInfoTemplateStatus" class="muted" aria-live="polite"></span></div>
-                <div id="comicInfoTemplatePreviewTitle" class="field-help" style="margin-top:10px"></div>
-                <pre id="comicInfoTemplatePreview" class="notice" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto"></pre>
+                <div class="field-help">Previews open in a dialog without changing or saving the XML.</div>
             </div>
 
             <div class="card">
@@ -1118,7 +1158,7 @@
                 <div class="toolbar"><button type="button" class="secondary" onclick="loadComicInfoArchive()">Load Selected Chapter XML</button><button type="button" class="secondary" onclick="pullComicInfoKavitaIntoArchive()">Pull Kavita + Chapter Info</button><button type="button" class="secondary" onclick="previewComicInfoArchive()">Preview XML</button><button type="button" onclick="saveComicInfoArchive()">Save XML to CBZ</button></div>
                 <div class="field" style="margin-top:12px"><label for="comicInfoArchiveEditor">Selected CBZ ComicInfo.xml</label><textarea id="comicInfoArchiveEditor" rows="18" spellcheck="false" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Choose a manga and chapter above, then load its XML. If the archive has no ComicInfo.xml, PanelKeeper loads a starter document."></textarea></div>
                 <div class="field-help">Pull Kavita + Chapter Info fills available series metadata and derives Number, Title, Volume, and Special Format from the selected chapter. Existing non-empty XML values are preserved unless they are chapter-identifying fields that can be parsed from the filename.</div>
-                <div class="toolbar" style="margin-top:12px"><button type="button" class="secondary" onclick="applyComicInfoPolicyToSeries()">Apply selected ComicInfo policy to this manga (including Specials)</button><span id="comicInfoArchiveStatus" class="muted" aria-live="polite"></span></div>
+                <div id="comicInfoArchiveStatus" class="field-help" aria-live="polite"></div>
             </div>
         </section>
 
@@ -1175,7 +1215,7 @@
                 <div class="section-title"><div><h2>Kavita Integration</h2><p class="muted">Connect Kavita to enable optional cover retrieval and metadata lookup. Manual cover selection and local chapter-cover generation work without Kavita.</p></div></div>
                 <div class="settings-grid">
                     <div class="field"><label for="kavitaBaseUrl">Kavita server URL</label><input id="kavitaBaseUrl" type="url" spellcheck="false" placeholder="http://localhost:5000"><div class="field-help">Enter the Kavita server root URL, including its port and any reverse-proxy base path. Do not append /api.</div></div>
-                    <div class="field"><label for="kavitaApiKey">Kavita Auth Key</label><input id="kavitaApiKey" type="password" autocomplete="new-password" placeholder="Paste an Auth Key; blank keeps the saved key"><div class="field-help">Create an Auth Key in Kavita under User Settings → Manage Auth Keys. It is stored in PanelKeeper's server-side settings database and is never returned to the browser. Older Kavita releases may require a server-side compatibility fallback for series-cover images; update Kavita to a build containing its ImageController apiKey fix to avoid the legacy query parameter.</div></div>
+                    <div class="field"><label for="kavitaApiKey">Kavita Auth Key</label><input id="kavitaApiKey" type="password" autocomplete="new-password" placeholder="Paste an Auth Key; blank keeps the saved key"><div class="field-help">Create an Auth Key in Kavita under User Settings → Manage Auth Keys. It is stored in PanelKeeper's server-side settings database and is never returned to the browser. </div></div>
                 </div>
                 <div class="toolbar"><button id="kavitaSaveConnectionButton" type="button" onclick="saveKavitaConnection()">Test &amp; Save Kavita Connection</button><span id="kavitaConnectionStatus" class="muted" aria-live="polite">Kavita connection has not been checked.</span></div>
             </div>
@@ -1210,21 +1250,28 @@
         </div>
     </div>
 
+    <div id="comicInfoPreviewModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="comicInfoPreviewHeading">
+        <div class="modal-content" style="width:min(950px,96vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+            <div class="section-title" style="flex:0 0 auto"><div><h2 id="comicInfoPreviewHeading">ComicInfo.xml Preview</h2><p id="comicInfoPreviewDescription" class="muted"></p></div><button class="secondary small-button" type="button" onclick="closeComicInfoPreview()">Close</button></div>
+            <pre id="comicInfoPreviewText" class="notice" style="flex:1 1 auto;min-height:0;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;margin-bottom:0"></pre>
+        </div>
+    </div>
+
     <div id="compareModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="compareTitle">
         <div class="modal-content compare-content">
             <div class="compare-header"><div><h2 id="compareTitle">Chapter Comparison</h2><div id="compareSubTitle" class="compare-legend">Loading archive pages…</div></div><div class="compare-header-controls"><label class="compare-sync"><input id="syncCompareScroll" type="checkbox" checked> Sync scrolling</label><button class="secondary" onclick="closeCompareModal()">Close</button></div></div>
-            <div id="compareNote" class="notice warn" style="margin:8px 12px">Page counts and file size do not prove that a chapter is complete.</div>
+            <div id="compareNote" class="notice" style="margin:8px 12px">To align matching pages, turn off Sync scrolling and adjust each side. Turn Sync scrolling back on to scroll together from those positions.</div>
             <div class="compare-grid">
                 <section class="compare-side">
-                    <div class="compare-side-head"><div><strong>Downloaded version</strong><small id="sourceCompareMeta">Reading archive…</small></div><div class="compare-jumps"><button class="secondary" onclick="scrollCompareEdge('source','top')">↑ Top</button><button class="secondary" onclick="scrollCompareEdge('source','bottom')">↓ Bottom</button></div></div>
-                    <div id="sourceCompareScroll" class="compare-scroll"><div class="compare-loading">Loading pages…</div></div>
+                    <div class="compare-side-head"><div><strong id="sourceCompareHeading">Downloaded version</strong><small id="sourceCompareMeta">Reading archive…</small></div><div class="compare-jumps"><button class="secondary" onclick="scrollCompareEdge('source','top')">↑ Top</button><button class="secondary" onclick="scrollCompareEdge('source','bottom')">↓ Bottom</button></div></div>
+                    <div id="sourceCompareScroll" class="compare-scroll" tabindex="0" role="region" aria-label="Comparison left pages"><div class="compare-loading">Loading pages…</div></div>
                 </section>
                 <section class="compare-side">
-                    <div class="compare-side-head"><div><strong>Current library version</strong><small id="libraryCompareMeta">Reading archive…</small></div><div class="compare-jumps"><button class="secondary" onclick="scrollCompareEdge('library','top')">↑ Top</button><button class="secondary" onclick="scrollCompareEdge('library','bottom')">↓ Bottom</button></div></div>
-                    <div id="libraryCompareScroll" class="compare-scroll"><div class="compare-loading">Loading pages…</div></div>
+                    <div class="compare-side-head"><div><strong id="libraryCompareHeading">Current library version</strong><small id="libraryCompareMeta">Reading archive…</small></div><div class="compare-jumps"><button class="secondary" onclick="scrollCompareEdge('library','top')">↑ Top</button><button class="secondary" onclick="scrollCompareEdge('library','bottom')">↓ Bottom</button></div></div>
+                    <div id="libraryCompareScroll" class="compare-scroll" tabindex="0" role="region" aria-label="Comparison right pages"><div class="compare-loading">Loading pages…</div></div>
                 </section>
             </div>
-            <div class="compare-footer"><span class="muted">Images load progressively. With Sync scrolling enabled, moving either column moves the other to the same relative position.</span><div class="footer-actions"><button class="good" onclick="resolveCurrentConflict('use_download')">Use Downloaded Version</button><button class="warn" onclick="resolveCurrentConflict('keep_library')">Keep Library &amp; Delete Download</button></div></div>
+            <div class="compare-footer"><div class="footer-actions"><button id="compareUseSource" class="good" onclick="resolveCurrentConflict('use_download')">Use Downloaded Version</button><button id="compareKeepLibrary" class="warn" onclick="resolveCurrentConflict('keep_library')">Keep Library</button></div></div>
         </div>
     </div>
 
@@ -1254,6 +1301,7 @@
             <h2 id="appDialogTitle">PanelKeeper</h2>
             <div id="appDialogMessage" class="app-dialog-message"></div>
             <div id="appDialogInputWrap" class="app-dialog-input" style="display:none"><input id="appDialogInput" type="text" autocomplete="off"></div>
+            <div id="appDialogChoices" class="work-list" style="display:none;margin-top:14px;max-height:42vh;overflow:auto" aria-label="Choose issues to dismiss"></div>
             <div class="app-dialog-actions">
                 <button id="appDialogCancel" class="secondary dialog-cancel" type="button">Cancel</button>
                 <button id="appDialogConfirm" class="dialog-confirm" type="button">OK</button>
@@ -1369,7 +1417,11 @@
         let dialogResolver = null;
         let dialogPreviousOverflow = '';
         let conflictSearchTimer = null;
-        let syncScrollBusy = false;
+
+        let compareSyncDriver = null;
+        let compareSyncIntentUntil = 0;
+        const compareScrollTop = { source: 0, library: 0 };
+        const compareTouchY = { source: null, library: null };
         let compareEdgeJump = false;
         let compareEdgeJumpGeneration = 0;
         const compareSideState = { source: { loaded: 0, observer: null }, library: { loaded: 0, observer: null } };
@@ -1391,18 +1443,25 @@
         }
         const postJSON = (url, body) => api(url, { method: 'POST', body: JSON.stringify(body) });
 
-        function showAppDialog({ title = 'PanelKeeper', message = '', mode = 'alert', confirmText = 'OK', cancelText = 'Cancel', danger = false } = {}) {
+        function showAppDialog({ title = 'PanelKeeper', message = '', mode = 'alert', confirmText = 'OK', cancelText = 'Cancel', danger = false, choices = [] } = {}) {
             if (dialogResolver) dialogResolver(false);
             const backdrop = $('appDialogBackdrop');
             const cancel = $('appDialogCancel');
             const confirm = $('appDialogConfirm');
             $('appDialogTitle').textContent = title;
             $('appDialogMessage').textContent = String(message);
-            const wantsConfirm = mode === 'confirm';
+            const wantsChoices = mode === 'issues';
+            const choiceContainer = $('appDialogChoices');
+            choiceContainer.style.display = wantsChoices ? 'grid' : 'none';
+            choiceContainer.innerHTML = wantsChoices ? choices.map(choice => `<label class="toggle-row" style="margin:0;cursor:pointer;align-items:center"><input type="checkbox" value="${escapeHTML(choice.value)}"><span>${escapeHTML(choice.label)}${choice.count ? ` <small>(${Number(choice.count).toLocaleString()} file(s))</small>` : ''}</span></label>`).join('') : '';
+            const wantsConfirm = mode === 'confirm' || wantsChoices;
             cancel.style.display = wantsConfirm ? '' : 'none';
             cancel.textContent = cancelText;
             confirm.textContent = confirmText;
             confirm.className = `dialog-confirm${danger ? ' danger' : ''}`;
+            confirm.disabled = wantsChoices;
+            const updateChoices = () => { confirm.disabled = !choiceContainer.querySelector('input:checked'); };
+            choiceContainer.addEventListener('change', updateChoices);
             backdrop.classList.add('open');
             backdrop.setAttribute('aria-hidden', 'false');
             dialogPreviousOverflow = document.body.style.overflow;
@@ -1416,6 +1475,10 @@
                     confirm.removeEventListener('click', onConfirm);
                     backdrop.removeEventListener('click', onBackdrop);
                     document.removeEventListener('keydown', onKeydown);
+                    choiceContainer.removeEventListener('change', updateChoices);
+                    choiceContainer.innerHTML = '';
+                    choiceContainer.style.display = 'none';
+                    confirm.disabled = false;
                     backdrop.classList.remove('open');
                     backdrop.setAttribute('aria-hidden', 'true');
                     document.body.style.overflow = dialogPreviousOverflow;
@@ -1423,7 +1486,12 @@
                     resolve(value);
                 };
                 const onCancel = () => finish(false);
-                const onConfirm = () => finish(true);
+                const onConfirm = () => {
+                    if (wantsChoices) {
+                        const picked = [...choiceContainer.querySelectorAll('input:checked')].map(input => input.value);
+                        if (picked.length) finish(picked);
+                    } else finish(true);
+                };
                 const onBackdrop = event => { if (event.target === backdrop) finish(false); };
                 const onKeydown = event => { if (event.key === 'Escape') { event.preventDefault(); finish(false); } };
                 dialogResolver = finish;
@@ -1635,8 +1703,8 @@
                             <input class="queue-check conflict-check" type="checkbox" data-id="${item.id}" ${selectedConflictIds.has(item.id) ? 'checked' : ''} onchange="toggleConflictSelection(${item.id}, this.checked)" aria-label="Select conflict ${item.id}">
                             <div>
                                 <div class="work-title">${escapeHTML(item.target_series)} · ${escapeHTML(item.chapter_label)} <span class="tag warn">Review required</span></div>
-                                <div class="work-meta">Download: ${escapeHTML(item.source_basename)} · ${formatBytes(item.source_size)}</div>
-                                <div class="work-meta">Library: ${escapeHTML(item.destination_basename)} · ${formatBytes(item.destination_size)}</div>
+                                <div class="work-meta">${item.source_location === 'library' ? 'Library copy A' : 'Download'}: ${escapeHTML(item.source_basename)} · ${formatBytes(item.source_size)}</div>
+                                <div class="work-meta">${item.source_location === 'library' ? 'Library copy B' : 'Library'}: ${escapeHTML(item.destination_basename)} · ${formatBytes(item.destination_size)}</div>
                                 ${item.proposedName ? `<div class="work-meta"><strong>Proposed new library filename:</strong> ${escapeHTML(item.proposedName)}</div><div class="work-meta path">${escapeHTML(item.proposedPath || '')}</div>` : '<div class="work-meta" style="color:var(--warn)">Proposed filename unavailable; check the mapping and chapter label before resolving.</div>'}
                                 ${item.decision_reason ? `<div class="work-meta">Why it needs review: ${escapeHTML(item.decision_reason)}</div>` : ''}
                                 <div class="work-meta">Queued ${escapeHTML(prettyTimestamp(item.updated_at))}${item.source_exists === false ? ' · <span style="color:var(--bad)">Source file missing</span>' : item.source_exists === null ? ' · <span style="color:var(--warn)">Source path unavailable / unverified</span>' : ''}${item.destination_exists === false ? ' · <span style="color:var(--warn)">Library file missing</span>' : item.destination_exists === null ? ' · <span style="color:var(--warn)">Library path unavailable / unverified</span>' : ''}</div>
@@ -1644,8 +1712,8 @@
                         </div>
                         <div class="work-actions">
                             <button class="small-button" ${item.source_exists !== true || item.destination_exists !== true ? 'disabled' : ''} onclick="openComparison(${item.id})">Compare Pages</button>
-                            <button class="small-button good" ${item.source_exists !== true ? 'disabled' : ''} onclick="resolveConflictQuick(${item.id}, 'use_download')">Use Download</button>
-                            <button class="small-button warn" ${(item.source_exists !== true || item.destination_exists !== true) ? 'disabled' : ''} onclick="resolveConflictQuick(${item.id}, 'keep_library')">Keep Library</button>
+                            <button class="small-button good" ${item.source_exists !== true ? 'disabled' : ''} onclick="resolveConflictQuick(${item.id}, 'use_download')">${item.source_location === 'library' ? 'Keep Copy A' : 'Use Download'}</button>
+                            <button class="small-button warn" ${(item.source_exists !== true || item.destination_exists !== true) ? 'disabled' : ''} onclick="resolveConflictQuick(${item.id}, 'keep_library')">${item.source_location === 'library' ? 'Keep Copy B' : 'Keep Library'}</button>
                             <button class="secondary small-button" ${item.source_exists !== true ? 'disabled' : ''} onclick="resolveConflictQuick(${item.id}, 'send_to_attention')">Send to Attention</button>
                             ${item.source_exists === false ? `<button class="danger small-button" onclick="removeStaleConflict(${item.id})">Remove stale record</button>` : ''}
                         </div>
@@ -1681,7 +1749,7 @@
             const ids = [...selectedConflictIds];
             const count = allFiltered ? queuePaging.conflicts.total : ids.length;
             if (!count) { await notifyDialog('Select one or more conflicts, or choose Apply to all filtered results.'); return; }
-            const phrase = action === 'use_download' ? 'replace the library versions with the downloads' : action === 'keep_library' ? 'keep the library versions and remove the incoming downloads' : 'move the selected items to Files Needing Attention without changing either file';
+            const phrase = action === 'use_download' ? 'keep the first copy for each conflict and move the other copy to Recovery' : action === 'keep_library' ? 'keep the second copy for each conflict and move the other copy to Recovery' : 'send the selected items to Attention without changing either file';
             if (!await confirmDialog(`This will ${phrase} for ${count.toLocaleString()} conflict(s). Replaced library files will be kept in Recovery. Continue?`, { title: 'Process chapter conflicts', confirmText: 'Continue' })) return;
             const bulkButtons = document.querySelectorAll('#conflicts .queue-actions button');
             bulkButtons.forEach(button => button.disabled = true);
@@ -1710,7 +1778,18 @@
                     return `<option value="${escapeHTML(name)}">${escapeHTML(label)} (${Number(item.count || 0).toLocaleString()} pending)</option>`;
                 }).join('');
                 if (rows.some(item => (item.name || '__unmapped__') === current)) select.value = current;
-            } catch (error) { console.warn('Could not load Attention series filters:', error.message); }
+                const kindSelect = $('issueKindFilter');
+                const selectedKind = kindSelect.value;
+                const kinds = (data.kinds || []).filter(item => item.kind && item.kind !== '__jxl__')
+                    .sort((a, b) => naturalSort(friendlyIssue(a.kind), friendlyIssue(b.kind)));
+                kindSelect.innerHTML = '<option value="">All issue types</option><option value="__jxl__">JXL images</option>' +
+                    kinds.map(item => `<option value="${escapeHTML(item.kind)}">${escapeHTML(friendlyIssue(item.kind))}</option>`).join('');
+                if (selectedKind && selectedKind !== '__jxl__' && !kinds.some(item => item.kind === selectedKind)) {
+
+                    kindSelect.insertAdjacentHTML('beforeend', `<option value="${escapeHTML(selectedKind)}">${escapeHTML(friendlyIssue(selectedKind))}</option>`);
+                }
+                if (selectedKind) kindSelect.value = selectedKind;
+            } catch (error) { console.warn('Could not load Attention filters:', error.message); }
         }
 
         async function loadIssues(page = queuePaging.issues.page) {
@@ -1718,8 +1797,9 @@
             const size = Number($('issuePageSize').value || queuePageSize);
             const search = $('issueSearch').value;
             const series = $('issueSeriesFilter').value.trim();
+            const issue = $('issueKindFilter').value;
             try {
-                const query = new URLSearchParams({ page: String(page), limit: String(size), search, series });
+                const query = new URLSearchParams({ page: String(page), limit: String(size), search, series, issue });
                 const data = await api(`/api/issues?${query}`);
                 state.page = data.page;
                 state.total = data.total;
@@ -1744,7 +1824,7 @@
                             <div class="work-meta">Last checked ${escapeHTML(prettyTimestamp(item.updated_at))}${!item.exists ? ' · File no longer exists at this path' : ''}</div>
                             </div>
                         </div>
-                        <div class="work-actions"><button class="secondary small-button" ${!item.exists || !item.basename?.toLowerCase().endsWith('.cbz') ? 'disabled' : ''} onclick="openArchiveEditor('issue', ${item.id})">View / Edit Pages</button><button class="secondary small-button" onclick="recheckIssue(${item.id})">Recheck</button><button class="ghost small-button" onclick="ignoreIssue(${item.id})">Dismiss Record</button><button class="danger small-button" ${!item.exists ? 'disabled' : ''} onclick="deleteIssueFile(${item.id})">Move to Recovery</button></div>
+                        <div class="work-actions"><button class="secondary small-button" ${!item.exists || !item.basename?.toLowerCase().endsWith('.cbz') ? 'disabled' : ''} onclick="openArchiveEditor('issue', ${item.id})">View / Edit Pages</button>${item.kind === 'unsupported_image_format' && /jxl/i.test(item.reason || '') && item.exists ? `<button class="good small-button" onclick="startJxlConversion(false, ${item.id})">Convert JXL</button>` : ''}<button class="secondary small-button" onclick="recheckIssue(${item.id})">Recheck</button><button class="ghost small-button" onclick="ignoreIssue(${item.id})">Dismiss Record</button><button class="danger small-button" ${!item.exists ? 'disabled' : ''} onclick="deleteIssueFile(${item.id})">Move to Recovery</button></div>
                     </article>`).join('') : '<div class="empty">No files are waiting for attention. Unmatched folders remain available in Series Mapper until you map them.</div>';
                 $('issueSelectPage').checked = currentIssueRows.length > 0 && (issueAllFiltered || currentIssueRows.every(item => selectedIssueIds.has(item.id)));
                 $('issueAllFiltered').checked = issueAllFiltered;
@@ -1823,8 +1903,61 @@
             finally { buttons.forEach(button => button.disabled = false); }
         }
 
+        let jxlJobPoll = null;
+        async function pollJxlConversion() {
+            let job;
+            try { job = await api('/api/issues/convert-jxl/status'); }
+            catch (_) { return; }
+            const progress = $('jxlConversionProgress');
+            if (!job || job.status === 'idle') { progress.style.display = 'none'; return; }
+            progress.style.display = '';
+            const finished = job.status !== 'running';
+            $('jxlConversionProgressText').textContent = `${finished ? `JXL conversion ${job.status}` : 'Converting JXL'}: ${job.done}/${job.total} CBZ(s), ${job.converted} changed, ${job.pages} page(s), ${job.skipped} skipped, ${job.failed} failed${job.lastFile ? ` · ${job.lastFile}` : ''}${finished && job.firstError ? ` · First error: ${job.firstError}` : ''}`;
+            $('jxlConversionCancel').style.display = finished ? 'none' : '';
+            $('jxlConversionDismiss').style.display = finished ? '' : 'none';
+            if (jxlJobPoll) clearTimeout(jxlJobPoll);
+            jxlJobPoll = null;
+            if (!finished) jxlJobPoll = setTimeout(pollJxlConversion, 1200);
+            else await Promise.all([loadIssueFilters(),loadIssues(queuePaging.issues.page),loadRecoveryFilters(),loadLogs(),updateHealth()]);
+        }
+        async function dismissJxlConversion() {
+            try { await postJSON('/api/issues/convert-jxl/dismiss', {}); $('jxlConversionProgress').style.display = 'none'; }
+            catch (error) { await notifyDialog(error.message, 'JXL conversion'); }
+        }
+        async function cancelJxlConversion() {
+            try { await postJSON('/api/issues/convert-jxl/cancel', {}); await pollJxlConversion(); }
+            catch (error) { await notifyDialog(error.message, 'JXL conversion'); }
+        }
+        async function startJxlConversion(bulk, id = null) {
+            const ids = bulk ? [...selectedIssueIds] : [id];
+            const allFiltered = bulk && issueAllFiltered;
+            if (!allFiltered && !ids.length) { await notifyDialog('Select Attention items containing JXL pages first.'); return; }
+            try {
+                let count = ids.length;
+                if (allFiltered) {
+                    const kind = $('issueKindFilter').value;
+                    if (kind && !['__jxl__', 'unsupported_image_format'].includes(kind)) {
+                        await notifyDialog('No JXL Attention items match the selected issue type.');
+                        return;
+                    }
+                    const query = new URLSearchParams({page:'0',limit:'1',search:$('issueSearch').value,series:$('issueSeriesFilter').value,issue:'__jxl__'});
+                    const matches = await api(`/api/issues?${query}`);
+                    count = matches.total;
+                    if (!count) { await notifyDialog('No JXL Attention items match the current filters.'); return; }
+                }
+                if (!await confirmDialog(`Convert JXL pages in the selected Attention CBZ files? Only JXL images will change, with lossless WebP or PNG output. PanelKeeper saves each original CBZ in Recovery. Other unsupported images stay in Attention. ${allFiltered ? 'Only JXL findings matching the current filters will be processed.' : 'Files without JXL pages will be skipped.'}\n\nConversion preserves decoded pixels but may not retain original JXL HDR/color metadata. Continue?`, {title:'Convert JXL pages',confirmText:`Convert ${count.toLocaleString()} CBZ(s)`})) return;
+                const result = await postJSON('/api/issues/convert-jxl', {
+                    ids, allFiltered, search:$('issueSearch').value,
+                    series:$('issueSeriesFilter').value, issue:$('issueKindFilter').value
+                });
+                selectedIssueIds.clear(); issueAllFiltered = false;
+                $('issueAllFiltered').checked = false;
+                await pollJxlConversion();
+            } catch (error) { await notifyDialog(`JXL conversion could not start: ${error.message}`, 'JXL conversion'); }
+        }
+
         async function bulkAttention(action) {
-            const filters = { search: $('issueSearch').value, series: $('issueSeriesFilter').value };
+            const filters = { search: $('issueSearch').value, series: $('issueSeriesFilter').value, issue: $('issueKindFilter').value };
             const ids = [...selectedIssueIds];
             const count = issueAllFiltered ? queuePaging.issues.total : ids.length;
             if (!count) { await notifyDialog('Select Attention items on this page, across pages, or choose Apply to all filtered results.'); return; }
@@ -1989,13 +2122,14 @@
             const previousScrollTop = container.scrollTop;
             const normalPages = state.pages.filter(page => !page.managedCover);
             $('archiveEditorTitle').textContent = archiveEditorTitle(state);
-            $('archiveEditorMeta').textContent = `${state.series ? `${state.series} · ` : ''}${state.fileName} · ${state.pages.length} image(s) · ${formatBytes(state.archiveSize || 0)}`;
+            const jxlCount = state.pages.filter(page => page.extension === '.jxl').length;
+            $('archiveEditorMeta').textContent = `${state.series ? `${state.series} · ` : ''}${state.fileName} · ${state.pages.length} image(s) · ${formatBytes(state.archiveSize || 0)}${jxlCount ? ` · ${jxlCount} JXL page(s) require conversion for Kavita` : ''}`;
             const visible = state.pages.slice(0, state.visibleCount);
             container.innerHTML = visible.length ? visible.map((page, index) => `
                 <article class="archive-page-card${page.managedCover ? ' managed-cover' : ''}" data-page-index="${index}" ${page.managedCover ? '' : 'draggable="true"'}>
                     <div class="archive-page-heading"><strong>Page ${index + 1}</strong>${page.managedCover ? '<span class="tag warn">Managed cover · pinned</span>' : `<span class="work-meta">${formatBytes(page.size)}</span>`}</div>
-                    ${page.previewable ? `<a class="archive-page-image-wrap" href="${archiveEditorImageUrl(page.entryIndex, state)}" target="_blank" rel="noopener" title="Open original full-size image in a new tab"><img class="archive-page-image" loading="lazy" decoding="async" src="${archiveEditorImageUrl(page.entryIndex, state)}" alt="${escapeHTML(page.name)}"></a>` : `<div class="compare-loading">Preview unavailable for ${escapeHTML((page.extension || '').toUpperCase())} page. The file is still inside the CBZ and can be removed below.</div>`}
-                    <div class="archive-page-name" title="${escapeHTML(page.name)}">${escapeHTML(page.name)}${page.unsupportedFormat ? ' <span class="tag bad">Unsupported format</span>' : ''}</div>
+                    ${page.previewable ? `<a class="archive-page-image-wrap" href="${archiveEditorImageUrl(page.entryIndex, state)}" target="_blank" rel="noopener" title="${page.extension === '.jxl' ? 'Open full-size image preview' : 'Open original full-size image in a new tab'}"><img class="archive-page-image" loading="lazy" decoding="async" src="${archiveEditorImageUrl(page.entryIndex, state)}" alt="${escapeHTML(page.name)}"></a>` : `<div class="compare-loading">Preview unavailable for ${escapeHTML((page.extension || '').toUpperCase())} page. The file is still inside the CBZ and can be removed below.</div>`}
+                    <div class="archive-page-name" title="${escapeHTML(page.name)}">${escapeHTML(page.name)}${page.unsupportedFormat ? ' <span class="tag bad">Unsupported format</span>' : ''}${page.extension === '.jxl' ? ' <span class="tag warn">Kavita requires conversion</span>' : ''}</div>
                     ${page.managedCover ? '<div class="archive-page-lock">This image is controlled by the Chapter Covers rule.</div>' : `<div class="archive-page-actions"><button class="secondary small-button" onclick="moveArchivePage(${index}, -1)" ${normalPages.indexOf(page) <= 0 || state.busy ? 'disabled' : ''} aria-label="Move page ${index + 1} up">↑ Up</button><button class="secondary small-button" onclick="moveArchivePage(${index}, 1)" ${normalPages.indexOf(page) === normalPages.length - 1 || state.busy ? 'disabled' : ''} aria-label="Move page ${index + 1} down">↓ Down</button><button class="danger small-button" onclick="deleteArchiveEditorPage(${index})" ${state.busy || state.dirty || normalPages.length <= 1 ? 'disabled' : ''}>Delete Page</button></div>`}
                 </article>`).join('') : '<div class="empty">No recognized image pages were found in this CBZ.</div>';
             $('archiveEditorCount').textContent = `${state.pages.length.toLocaleString()} total images · ${normalPages.length.toLocaleString()} chapter pages${state.dirty ? ' · Page order has unsaved changes' : ' · Saved'}`;
@@ -2271,12 +2405,18 @@
         }
 
         async function resolveConflictQuick(id, action) {
+            const conflict = currentConflictRows.find(item => item.id === Number(id)) || (compareData?.conflict?.id === Number(id) ? compareData.conflict : null);
+            const bothInLibrary = conflict?.source_location === 'library';
             const prompts = {
-                use_download: 'Replace the library chapter with the downloaded version? The current library copy will be moved into Recovery.',
-                keep_library: 'Keep the current library chapter and delete the downloaded duplicate? This removes that incoming file from Downloads.',
-                send_to_attention: 'Move this item out of Conflicts and into Files Needing Attention so you can correct its chapter number yourself? Both files will remain unchanged.'
+                use_download: bothInLibrary
+                    ? 'Keep library copy A and move copy B into Recovery?'
+                    : 'Replace the library chapter with the downloaded version? The current library copy will be moved into Recovery.',
+                keep_library: bothInLibrary
+                    ? 'Keep library copy B and move copy A into Recovery?'
+                    : 'Keep the current library chapter and move the incoming duplicate into Recovery?',
+                send_to_attention: 'Send this item to Attention for manual chapter review? Both files will remain unchanged.'
             };
-            const confirmText = action === 'use_download' ? 'Use Download' : action === 'keep_library' ? 'Keep Library' : 'Send to Attention';
+            const confirmText = action === 'use_download' ? (bothInLibrary ? 'Keep Copy A' : 'Use Download') : action === 'keep_library' ? (bothInLibrary ? 'Keep Copy B' : 'Keep Library') : 'Send to Attention';
             if (!await confirmDialog(prompts[action] || 'Resolve this conflict?', { title: 'Resolve chapter conflict', confirmText, danger: action === 'keep_library' })) return;
             try {
                 const result = await postJSON(`/api/conflicts/${id}/resolve`, { action });
@@ -2351,6 +2491,7 @@
             const jumpGeneration = ++compareEdgeJumpGeneration;
             const conflictId = currentConflictId;
             const jumpButtons = [...document.querySelectorAll('.compare-jumps button')];
+            resetCompareScrollSync();
             compareEdgeJump = true;
             jumpButtons.forEach(button => {
                 button.dataset.originalLabel = button.textContent;
@@ -2432,6 +2573,7 @@
             } finally {
                 setTimeout(() => {
                     if (jumpGeneration !== compareEdgeJumpGeneration) return;
+                    captureCompareScrollPositions();
                     compareEdgeJump = false;
                     jumpButtons.forEach(button => {
                         button.disabled = false;
@@ -2444,21 +2586,131 @@
             }
         }
 
-        function syncCompareScrollFrom(side) {
-            if (!$('syncCompareScroll').checked || syncScrollBusy || compareEdgeJump) return;
-            const source = side === 'source' ? $('sourceCompareScroll') : $('libraryCompareScroll');
-            const target = side === 'source' ? $('libraryCompareScroll') : $('sourceCompareScroll');
-            const sourceMax = Math.max(1, source.scrollHeight - source.clientHeight);
-            const targetMax = Math.max(0, target.scrollHeight - target.clientHeight);
-            const ratio = Math.max(0, Math.min(1, source.scrollTop / sourceMax));
-            syncScrollBusy = true;
-            target.scrollTop = ratio * targetMax;
-            requestAnimationFrame(() => { syncScrollBusy = false; });
+        function captureCompareScrollPositions() {
+            compareScrollTop.source = $('sourceCompareScroll').scrollTop;
+            compareScrollTop.library = $('libraryCompareScroll').scrollTop;
         }
-        $('sourceCompareScroll').addEventListener('scroll', () => syncCompareScrollFrom('source'), { passive: true });
-        $('libraryCompareScroll').addEventListener('scroll', () => syncCompareScrollFrom('library'), { passive: true });
+
+        function resetCompareScrollSync() {
+            captureCompareScrollPositions();
+            compareSyncDriver = null;
+            compareSyncIntentUntil = 0;
+            compareTouchY.source = null;
+            compareTouchY.library = null;
+        }
+
+        function markCompareScrollIntent(side, duration = 700) {
+            if (compareEdgeJump || !$('syncCompareScroll').checked) return;
+            compareSyncDriver = side;
+            compareSyncIntentUntil = performance.now() + duration;
+        }
+
+        function extendComparePagesIfNeeded(side, delta) {
+            if (delta <= 0 || !compareData) return;
+            const root = $(side === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+            const pages = side === 'source' ? compareData.sourcePages : compareData.libraryPages;
+            const sentinel = $(`${side}Sentinel`);
+            if (!Array.isArray(pages) || !sentinel?.isConnected ||
+                compareSideState[side].loaded >= pages.length) return;
+            const distanceToEnd = root.scrollHeight - root.clientHeight - root.scrollTop;
+            if (distanceToEnd <= Math.abs(delta) + root.clientHeight) {
+                appendCompareBatch(side, pages, root, sentinel);
+            }
+        }
+
+        function scrollCompareLinked(delta) {
+            if (!Number.isFinite(delta) || !delta || compareEdgeJump || !compareData ||
+                !$('syncCompareScroll').checked) return;
+            compareSyncDriver = null;
+            compareSyncIntentUntil = 0;
+            for (const side of ['source', 'library']) {
+                const root = $(side === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+                extendComparePagesIfNeeded(side, delta);
+                root.scrollTop += delta;
+                compareScrollTop[side] = root.scrollTop;
+            }
+        }
+
+        function handleCompareScroll(side) {
+            const root = $(side === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+            const current = root.scrollTop;
+            const delta = current - compareScrollTop[side];
+            compareScrollTop[side] = current;
+            if (!delta || !compareData || compareEdgeJump || !$('syncCompareScroll').checked ||
+                compareSyncDriver !== side || performance.now() > compareSyncIntentUntil) return;
+            const otherSide = side === 'source' ? 'library' : 'source';
+            const other = $(otherSide === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+            extendComparePagesIfNeeded(otherSide, delta);
+            other.scrollTop += delta;
+            compareScrollTop[otherSide] = other.scrollTop;
+        }
+
+        function compareWheelDistance(event, root) {
+            const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? root.clientHeight : 1;
+            return event.deltaY * unit;
+        }
+
+        for (const side of ['source', 'library']) {
+            const root = $(side === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+            root.addEventListener('wheel', event => {
+                if (!$('syncCompareScroll').checked || compareEdgeJump || !compareData ||
+                    event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+                const delta = compareWheelDistance(event, root);
+                if (!delta) return;
+
+                compareSyncDriver = null;
+                compareSyncIntentUntil = 0;
+                extendComparePagesIfNeeded(side, delta);
+                const otherSide = side === 'source' ? 'library' : 'source';
+                const other = $(otherSide === 'source' ? 'sourceCompareScroll' : 'libraryCompareScroll');
+                extendComparePagesIfNeeded(otherSide, delta);
+                other.scrollTop += delta;
+                compareScrollTop[otherSide] = other.scrollTop;
+
+            }, { passive: true });
+            root.addEventListener('touchstart', event => {
+                compareTouchY[side] = event.touches.length === 1 ? event.touches[0].clientY : null;
+            }, { passive: true });
+            root.addEventListener('touchmove', event => {
+                if (!$('syncCompareScroll').checked || compareEdgeJump || !compareData ||
+                    event.touches.length !== 1 || compareTouchY[side] === null) return;
+                const y = event.touches[0].clientY;
+                const delta = compareTouchY[side] - y;
+                compareTouchY[side] = y;
+                if (!delta) return;
+                event.preventDefault();
+                scrollCompareLinked(delta);
+            }, { passive: false });
+            root.addEventListener('touchend', () => { compareTouchY[side] = null; }, { passive: true });
+            root.addEventListener('touchcancel', () => { compareTouchY[side] = null; }, { passive: true });
+            root.addEventListener('pointerdown', () => markCompareScrollIntent(side, 1500), { passive: true });
+            root.addEventListener('pointermove', event => {
+                if (event.buttons) markCompareScrollIntent(side, 1000);
+            }, { passive: true });
+            root.addEventListener('pointerup', () => markCompareScrollIntent(side, 650), { passive: true });
+            root.addEventListener('keydown', event => {
+                if (!$('syncCompareScroll').checked || compareEdgeJump || !compareData ||
+                    event.altKey || event.ctrlKey || event.metaKey) return;
+                let delta = 0;
+                if (event.key === 'ArrowDown') delta = 40;
+                else if (event.key === 'ArrowUp') delta = -40;
+                else if (event.key === 'PageDown' || event.key === ' ') delta = root.clientHeight * (event.shiftKey ? -0.9 : 0.9);
+                else if (event.key === 'PageUp') delta = -root.clientHeight * 0.9;
+                else if (event.key === 'Home' || event.key === 'End') {
+                    event.preventDefault();
+                    scrollCompareEdge(side, event.key === 'Home' ? 'top' : 'bottom');
+                    return;
+                }
+                if (!delta) return;
+                event.preventDefault();
+                scrollCompareLinked(delta);
+            });
+            root.addEventListener('scroll', () => handleCompareScroll(side), { passive: true });
+        }
+        $('syncCompareScroll').addEventListener('change', resetCompareScrollSync);
 
         async function openComparison(id) {
+            resetCompareScrollSync();
             currentConflictId = id;
             compareData = null;
             updateCompareViewportHeight();
@@ -2467,14 +2719,24 @@
             document.body.style.overflow = 'hidden';
             $('compareTitle').textContent = 'Chapter Comparison';
             $('compareSubTitle').textContent = 'Loading page lists…';
-            $('sourceCompareScroll').innerHTML = '<div class="compare-loading">Reading downloaded archive…</div>';
-            $('libraryCompareScroll').innerHTML = '<div class="compare-loading">Reading library archive…</div>';
+            $('sourceCompareHeading').textContent = 'Downloaded version';
+            $('libraryCompareHeading').textContent = 'Current library version';
+            $('sourceCompareMeta').textContent = 'Reading archive…';
+            $('libraryCompareMeta').textContent = 'Reading archive…';
+            $('sourceCompareScroll').innerHTML = '<div class="compare-loading">Reading left archive…</div>';
+            $('libraryCompareScroll').innerHTML = '<div class="compare-loading">Reading right archive…</div>';
             try {
                 compareData = await api(`/api/conflicts/${id}/compare`);
+                const bothInLibrary = compareData.conflict.source_location === 'library';
+                $('sourceCompareHeading').textContent = bothInLibrary ? 'Library copy A' : 'Downloaded version';
+                $('libraryCompareHeading').textContent = bothInLibrary ? 'Library copy B' : 'Current library version';
+                $('compareUseSource').textContent = bothInLibrary ? 'Keep Copy A' : 'Use Downloaded Version';
+                $('compareKeepLibrary').textContent = bothInLibrary ? 'Keep Copy B' : 'Keep Library';
                 $('compareTitle').textContent = `${compareData.conflict.target_series} · ${compareData.conflict.chapter_label}`;
                 $('compareSubTitle').textContent = `${compareData.note}`;
                 buildCompareSide('source', compareData.sourcePages);
                 buildCompareSide('library', compareData.libraryPages);
+                captureCompareScrollPositions();
             } catch (error) {
                 $('compareSubTitle').textContent = error.message;
                 $('sourceCompareScroll').innerHTML = `<div class="compare-loading">${escapeHTML(error.message)}</div>`;
@@ -2489,10 +2751,11 @@
             const fileName = side === 'source' ? conflict.source_name : conflict.destination_name;
             const size = side === 'source' ? conflict.source_size : conflict.destination_size;
             meta.textContent = `${fileName} · ${formatBytes(size)} · ${pages.length} image file(s) (informational only)`;
+            meta.title = meta.textContent;
             root.innerHTML = '';
             compareSideState[side].loaded = 0;
             if (compareSideState[side].observer) compareSideState[side].observer.disconnect();
-            if (!pages.length) { root.innerHTML = '<div class="compare-loading">No supported image entries were found in this archive.</div>'; return; }
+            if (!pages.length) { root.innerHTML = '<div class="compare-loading">No previewable image entries were found in this archive.</div>'; return; }
             const sentinel = document.createElement('div');
             sentinel.className = 'compare-loading';
             sentinel.id = `${side}Sentinel`;
@@ -2518,10 +2781,11 @@
                 const page = pages[i];
                 const card = document.createElement('div');
                 card.className = 'page-card';
+                card.dataset.pagePosition = String(i);
                 const img = document.createElement('img');
                 img.loading = 'lazy';
                 img.decoding = 'async';
-                img.alt = `${side === 'source' ? 'Downloaded' : 'Library'} page ${i + 1}: ${page.name}`;
+                img.alt = `${side === 'source' ? (compareData?.conflict?.source_location === 'library' ? 'Library copy A' : 'Downloaded') : (compareData?.conflict?.source_location === 'library' ? 'Library copy B' : 'Library')} page ${i + 1}: ${page.name}`;
                 img.src = `/api/conflicts/${currentConflictId}/page/${side}/${page.index}`;
                 img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'), { className: 'compare-loading', textContent: `Could not display page: ${page.name}` })); };
                 const label = document.createElement('div');
@@ -2536,6 +2800,7 @@
         }
 
         function closeCompareModal() {
+            resetCompareScrollSync();
             resetCompareEdgeJump();
             $('compareModal').classList.remove('open');
             document.body.style.overflow = '';
@@ -2754,12 +3019,14 @@
         $('chapterCoverFontSize').addEventListener('input', () => $('chapterCoverFontSizeValue').textContent = `${$('chapterCoverFontSize').value}%`);
         $('chapterCoverOutlineWidth').addEventListener('input', () => $('chapterCoverOutlineWidthValue').textContent = $('chapterCoverOutlineWidth').value);
         $('chapterCoverPanelOpacity').addEventListener('input', () => $('chapterCoverPanelOpacityValue').textContent = `${Math.round(Number($('chapterCoverPanelOpacity').value) * 100)}%`);
+        pollJxlConversion().catch(() => {});
         $('issueSearch').addEventListener('input', () => {
             selectedIssueIds.clear(); issueAllFiltered = false; $('issueAllFiltered').checked = false;
             if (window.issueSearchTimer) clearTimeout(window.issueSearchTimer);
             window.issueSearchTimer = setTimeout(() => loadIssues(0), 220);
         });
         $('issuePageSize').addEventListener('change', () => loadIssues(0));
+        $('issueKindFilter').addEventListener('change', () => { selectedIssueIds.clear(); issueAllFiltered = false; $('issueAllFiltered').checked = false; loadIssues(0); });
         $('issueSeriesFilter').addEventListener('change', () => { selectedIssueIds.clear(); issueAllFiltered = false; $('issueAllFiltered').checked = false; loadIssues(0); });
         $('recoverySearch').addEventListener('input', () => {
             if (recoverySearchTimer) clearTimeout(recoverySearchTimer);
@@ -3245,12 +3512,26 @@
                 $('qcList').innerHTML = `<tr><td colspan="6" class="muted">Could not load QC results: ${escapeHTML(error.message)}</td></tr>`;
             }
         }
+        async function pickQcIssuesToDismiss(items) {
+            const counts = new Map();
+            for (const item of items) for (const issue of item.issues || []) counts.set(issue, (counts.get(issue) || 0) + 1);
+            if (!counts.size) return [];
+            const choices = [...counts.entries()].map(([value, count]) => ({ value, count, label: friendlyIssue(value) }));
+            return await showAppDialog({
+                title: 'Choose QC issues to dismiss',
+                message: items.length === 1 ? `Select the findings that are not issues for ${items[0].file}. Other findings will remain active.`
+                    : `Select which issue types are not issues for the ${items.length.toLocaleString()} selected files. Other findings will remain active.`,
+                mode: 'issues', confirmText: 'Not an Issue', choices
+            }) || [];
+        }
+
         async function dismissQcIssue(index) {
             const item = qcFiles[Number(index)];
             if (!item) return;
-            if (!await confirmDialog(`Mark this QC finding as not an issue?\n\n${item.file}`, { title: 'Dismiss QC finding', confirmText: 'Not an Issue' })) return;
+            const selected = await pickQcIssuesToDismiss([item]);
+            if (!selected.length) return;
             try {
-                await postJSON('/api/qc/dismiss', { path: item.path });
+                await postJSON('/api/qc/dismiss', { path: item.path, size: item.size, mtime: item.mtime, issues: selected });
                 await loadQcFilters();
                 await renderQC();
             } catch (error) { await notifyDialog(error.message, 'QC'); }
@@ -3282,12 +3563,15 @@
                 .map(checkbox => qcFiles[Number(checkbox.dataset.index)])
                 .filter(Boolean);
             if (!selected.length) { await notifyDialog('Select one or more QC findings on this page first.', 'QC'); return; }
-            if (!await confirmDialog(`Mark ${selected.length.toLocaleString()} selected QC finding(s) as not an issue? They will be hidden from the active QC list until the file changes or the finding is invalidated by a parser-rule update.`, { title: 'Dismiss selected QC findings', confirmText: 'Not an Issue' })) return;
+            const chosenTypes = await pickQcIssuesToDismiss(selected);
+            if (!chosenTypes.length) return;
+            const chosen = new Set(chosenTypes);
+            const items = selected.map(item => ({ path: item.path, size: item.size, mtime: item.mtime, issues: item.issues.filter(issue => chosen.has(issue)) })).filter(item => item.issues.length);
             const button = $('dismissQcBulkButton');
             button.disabled = true;
             try {
-                const result = await postJSON('/api/qc/dismiss/bulk', { paths: selected.map(item => item.path) });
-                await notifyDialog(`${Number(result.dismissed || 0).toLocaleString()} finding(s) marked as not an issue.${result.skipped ? `
+                const result = await postJSON('/api/qc/dismiss/bulk', { items });
+                await notifyDialog(`${Number(result.dismissed || 0).toLocaleString()} issue finding(s) marked as not an issue. Other issues remain active.${result.skipped ? `
 ${Number(result.skipped).toLocaleString()} stale finding(s) were skipped.` : ''}`, 'QC');
                 await loadQcFilters();
                 qcPage = 0;
@@ -3321,9 +3605,10 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             catch (error) { checkbox.checked = !checkbox.checked; await notifyDialog(`Could not save automatic QC: ${error.message}`, 'Automatic QC'); }
         }
 
-        const automaticQcActionKeys = ['autoQCRepairNames', 'autoQCOrganizeSpecials', 'autoQCApplyComicInfo', 'autoQCResolveDuplicates', 'autoQCRouteToReview', 'autoQCRouteUnsupportedImages'];
+        const automaticQcActionKeys = ['autoQCRepairNames', 'autoQCApplyGlobalIgnoresToLibrary', 'autoQCOrganizeSpecials', 'autoQCApplyComicInfo', 'autoQCResolveDuplicates', 'autoQCRouteToReview', 'autoQCRouteUnsupportedImages', 'autoQCConvertJxl'];
         function syncAutomaticQcActionControls() {
             $('autoQCOrganizeSpecials').disabled = !$('autoQCRepairNames').checked;
+            $('autoQCApplyGlobalIgnoresToLibrary').disabled = !$('autoQCRepairNames').checked;
             $('autoQCActionStatus').textContent = $('autoQCRepairNames').checked
                 ? 'All switches save immediately. Automatic QC findings remain visible when an action is off.'
                 : 'Automatic filename changes are off, including Specials moves and duplicate-copy renames. Other enabled actions can still run.';
@@ -3518,9 +3803,11 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                 const kindLabel = kindLabels[detail.filterKind] || 'CBZ files';
                 $('libraryChapterSummary').textContent = `${Number(detail.filteredCount || 0).toLocaleString()} ${kindLabel} shown · ${Number(detail.specialCount || 0).toLocaleString()} Specials in this manga · ${Number(detail.fileCount || 0).toLocaleString()} total files.`;
                 $('libraryChapterPageSummary').textContent = detail.total ? `Showing ${(detail.page * detail.limit + 1).toLocaleString()}–${Math.min((detail.page + 1) * detail.limit, detail.total).toLocaleString()} of ${detail.total.toLocaleString()} ${kindLabel}` : `No ${kindLabel} found`;
+                $('libraryChapterPageSummaryTop').textContent = $('libraryChapterPageSummary').textContent;
                 renderNumberedPageControls('libraryChapterPageNumbers', 'libraryChapterPageJump', 'libraryChapterPageCount', detail.page, detail.pages, page => loadLibrarySeriesDetail(page));
-                $('libraryChapterPrev').disabled = detail.page <= 0;
-                $('libraryChapterNext').disabled = (detail.page + 1) >= detail.pages;
+                renderNumberedPageControls('libraryChapterPageNumbersTop', 'libraryChapterPageJumpTop', 'libraryChapterPageCountTop', detail.page, detail.pages, page => loadLibrarySeriesDetail(page));
+                $('libraryChapterPrev').disabled = $('libraryChapterPrevTop').disabled = detail.page <= 0;
+                $('libraryChapterNext').disabled = $('libraryChapterNextTop').disabled = (detail.page + 1) >= detail.pages;
                 $('libraryChapterList').innerHTML = items.length ? items.map((item, index) => `
                     <div class="library-chapter-row" data-library-chapter-index="${index}">
                         <div><strong>${escapeHTML(item.file_name)}</strong><div class="work-meta">${escapeHTML(item.chapter_label || (item.is_special ? 'Special' : 'No safe chapter label'))} ${item.is_special ? '<span class="tag">Special</span>' : ''} ${item.duplicate ? '<span class="tag warn">Duplicate ID</span>' : ''}</div><div class="work-meta path">${escapeHTML(item.path)}</div></div>
@@ -3537,9 +3824,12 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
 
         function refreshLibrarySeriesDetail() { return loadLibrarySeriesDetail(libraryChapterPage); }
         function changeLibraryChapterPage(delta) { return loadLibrarySeriesDetail(libraryChapterPage + delta); }
-        async function jumpLibraryChapterPage() {
-            const pages = Math.max(1, Math.ceil(Number($('libraryChapterPageCount').textContent.replace(/^\/\s*/, '').replace(/,/g, '') || 1)));
-            await goToRequestedPage('libraryChapterPageJump', pages, libraryChapterPage, page => loadLibrarySeriesDetail(page), 'chapter inventory');
+        async function jumpLibraryChapterPage(position = 'bottom') {
+            const top = position === 'top';
+            const countId = top ? 'libraryChapterPageCountTop' : 'libraryChapterPageCount';
+            const inputId = top ? 'libraryChapterPageJumpTop' : 'libraryChapterPageJump';
+            const pages = Math.max(1, Number($(countId).textContent.replace(/^\/\s*/, '').replace(/,/g, '') || 1));
+            await goToRequestedPage(inputId, pages, libraryChapterPage, page => loadLibrarySeriesDetail(page), 'chapter inventory');
         }
 
         async function setLibraryCompleted() {
@@ -3782,12 +4072,20 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             const token = ++kavitaPreviewRequestToken;
             const image = $('kavitaMainCoverPreview');
             const empty = $('kavitaMainCoverEmpty');
+            image.onload = () => {
+                if (token !== kavitaPreviewRequestToken) return;
+                const dimensions = `${image.naturalWidth} × ${image.naturalHeight} px`;
+                const meta = $('kavitaMainCoverMeta');
+                if (meta && !meta.textContent.includes(dimensions)) meta.textContent = `${meta.textContent} · ${dimensions}`;
+            };
             if (kavitaSeriesId) {
                 image.onerror = () => {
                     if (token !== kavitaPreviewRequestToken) return;
                     image.onerror = null;
-                    if (fallbackPath) image.src = `/api/covers/preview-image?${new URLSearchParams({ series, kind: 'cover', file: fallbackPath })}`;
-                    else { image.style.display = 'none'; empty.style.display = 'block'; empty.textContent = 'Kavita cover preview could not be loaded.'; }
+                    if (fallbackPath) {
+                        $('kavitaMainCoverMeta').textContent = 'Previously downloaded Kavita main cover';
+                        image.src = `/api/covers/preview-image?${new URLSearchParams({ series, kind: 'cover', file: fallbackPath })}`;
+                    } else { image.style.display = 'none'; empty.style.display = 'block'; empty.textContent = 'Kavita cover preview could not be loaded.'; }
                 };
                 image.src = `/api/covers/kavita/preview?seriesId=${encodeURIComponent(kavitaSeriesId)}&t=${Date.now()}`;
                 image.style.display = 'block';
@@ -4293,8 +4591,10 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                 if ($('coverSeriesSelect').value !== series) return;
 
                 const selectedCoverPath = $('coverImageSelect').value;
+                const replacedLegacy = Array.isArray(result.replacedLegacyPaths) && result.replacedLegacyPaths.includes(selectedCoverPath);
+                if (replacedLegacy) $('coverImageSelect').value = result.coverPath;
                 await loadCoverPreview();
-                if (selectedCoverPath && Array.from($('coverImageSelect').options).some(option => option.value === selectedCoverPath)) {
+                if (!replacedLegacy && selectedCoverPath && Array.from($('coverImageSelect').options).some(option => option.value === selectedCoverPath)) {
                     $('coverImageSelect').value = selectedCoverPath;
                 }
                 status.textContent = `${result.message || 'Kavita main cover downloaded.'} Auto Cover remains ${$('kavitaAutoCoverEnabled').checked ? 'enabled' : 'off'}; no chapter CBZ was changed.`;
@@ -4550,11 +4850,16 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             return `<?xml version="1.0" encoding="utf-8"?>\n${new XMLSerializer().serializeToString(doc.documentElement)}`;
         }
         function showComicInfoPreview(xml, title) {
-            const preview = $('comicInfoTemplatePreview');
-            preview.textContent = String(xml || '').trim();
-            preview.hidden = false;
-            preview.style.display = 'block';
-            $('comicInfoTemplatePreviewTitle').textContent = title || '';
+            $('comicInfoPreviewText').textContent = String(xml || '').trim();
+            $('comicInfoPreviewDescription').textContent = title || '';
+            const modal = $('comicInfoPreviewModal');
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+        }
+        function closeComicInfoPreview() {
+            const modal = $('comicInfoPreviewModal');
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
         }
         async function loadComicInfoTab() {
             const status = $('comicInfoPolicyStatus');
@@ -4593,9 +4898,7 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                     ? (storedKey ? templates.seriesTemplates[storedKey] : (templates.globalTemplate || templates.defaultTemplate || ''))
                     : (templates.globalTemplate || templates.defaultTemplate || '');
                 status.textContent = scope === 'series' && !storedKey ? 'No manga-specific template saved yet; loaded the global template as a starting point.' : 'Template loaded.';
-                $('comicInfoTemplatePreview').hidden = true;
-                $('comicInfoTemplatePreview').style.display = 'none';
-                $('comicInfoTemplatePreviewTitle').textContent = '';
+
             } catch (error) { status.textContent = error.message; }
         }
         function addComicInfoTemplateField() {
@@ -4651,7 +4954,7 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             status.textContent = 'Saving policy…';
             try {
                 const result = await postJSON('/api/settings', { key: 'comicInfoPolicy', value: $('comicInfoPolicySelect').value });
-                status.textContent = `ComicInfo policy saved: ${result.value}. It will be used for incoming files, scheduled metadata maintenance, and QC repairs.`;
+                status.textContent = `ComicInfo policy saved: ${result.value}. It applies to incoming files and enabled Automatic QC metadata actions. Existing chapters are not changed immediately.`;
             } catch (error) { status.textContent = `Could not save policy: ${error.message}`; }
         }
         async function loadComicInfoArchiveList() {
@@ -4797,8 +5100,8 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
         }
         async function applyComicInfoPolicyToSeries() {
             const series = selectedComicInfoSeries();
-            const policy = $('comicInfoPolicySelect').value;
-            const status = $('comicInfoArchiveStatus');
+            const policy = $('comicInfoOneTimePolicy').value;
+            const status = $('comicInfoApplyStatus');
             if (!series) { status.textContent = 'Select a manga first.'; return; }
             if (policy === 'leave') { status.textContent = 'Leave alone is selected; no changes will be made.'; return; }
             const applyDescriptions = {
@@ -4877,7 +5180,7 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
                 $('schedulerTimezone').value = settings.schedulerTimezone || 'system';
                 if (settings.cronSchedule && !settings.scheduleValid) $('settingsStatus').textContent = 'Saved schedule is invalid. Choose a preset or enter a valid custom cron expression.';
                 $('autoQcToggle').checked = String(settings.autoQC ?? 'false') === 'true';
-                for (const key of automaticQcActionKeys) $(key).checked = String(settings[key] ?? (key === 'autoQCRouteUnsupportedImages' ? 'false' : 'true')) === 'true';
+                for (const key of automaticQcActionKeys) $(key).checked = String(settings[key] ?? (['autoQCRouteUnsupportedImages','autoQCConvertJxl'].includes(key) ? 'false' : 'true')) === 'true';
                 syncAutomaticQcActionControls();
                 $('autoQCIntervalHours').value = settings.autoQCIntervalHours || 168;
                 $('automaticFullQCEnabled').checked = String(settings.automaticFullQCEnabled ?? 'false') === 'true';
@@ -4955,12 +5258,14 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
 
         for (const modal of document.querySelectorAll('.modal')) modal.addEventListener('click', event => {
             if (event.target !== modal) return;
+            if (modal.id === 'comicInfoPreviewModal') closeComicInfoPreview();
             if (modal.id === 'editModal') closeEditModal();
             if (modal.id === 'compareModal') closeCompareModal();
             if (modal.id === 'archiveEditorModal') closeArchiveEditor();
         });
         document.addEventListener('keydown', event => {
             if (event.key !== 'Escape' || $('appDialogBackdrop').classList.contains('open')) return;
+            if ($('comicInfoPreviewModal').classList.contains('open')) { closeComicInfoPreview(); return; }
             if ($('archiveEditorModal').classList.contains('open')) { closeArchiveEditor(); return; }
             if ($('compareModal').classList.contains('open')) { closeCompareModal(); return; }
             if ($('editModal').classList.contains('open')) closeEditModal();

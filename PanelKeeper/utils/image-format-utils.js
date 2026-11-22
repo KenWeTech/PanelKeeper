@@ -48,7 +48,7 @@ function describeUnsupportedImages(entries) {
     const summary = [...counts].sort(([a], [b]) => a.localeCompare(b))
         .map(([name, count]) => `${name} (${count})`).join(', ');
     const examples = entries.slice(0, 5).map(item => String(item.name).slice(-110)).join(', ');
-    return `Unsupported image pages found inside CBZ: ${summary}. Example entries: ${examples}${entries.length > 5 ? ` (and ${entries.length - 5} more)` : ''}. Image extensions are checked without decoding or changing the archive. No conversion was attempted.`;
+    return `Unsupported image pages found inside CBZ: ${summary}. Example entries: ${examples}${entries.length > 5 ? ` (and ${entries.length - 5} more)` : ''}. Other unsupported page entries still require review.`;
 }
 
 module.exports = { SUPPORTED_PAGE_EXTENSIONS, isRecognizedImageExtension, isSupportedPageExtension, unsupportedImagesInDirectory, describeUnsupportedImages };

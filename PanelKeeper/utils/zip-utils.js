@@ -154,6 +154,11 @@ function imageEntries(directory, { includeManaged = false, includeUnsupported = 
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
+function previewImageEntries(directory, { includeManaged = false } = {}) {
+    return imageEntries(directory, { includeManaged, includeUnsupported: true })
+        .filter(entry => IMAGE_EXTENSIONS.has(path.posix.extname(entry.name).toLowerCase()) || path.posix.extname(entry.name).toLowerCase() === '.jxl');
+}
+
 function displayImageName(entryName) {
     return String(entryName || '').replace(/^PKORDER-\d{8}__/i, '');
 }
@@ -924,12 +929,138 @@ function mimeTypeForImage(name) {
     }
 }
 
+async function convertJxlPagesInPlace(filePath, { beforeCommit, encodeEntry, onStart, onProgress } = {}) {
+    const archivePath = path.resolve(filePath);
+    const directory = await readZipDirectory(archivePath);
+    const jxlPages = previewImageEntries(directory, { includeManaged: true })
+        .filter(entry => path.posix.extname(entry.name).toLowerCase() === '.jxl');
+    if (!jxlPages.length) return { changed: false, converted: 0, webp: 0, png: 0 };
+    if (typeof onStart === 'function') onStart({ total: jxlPages.length });
+    if (directory.entries.some(entry => entry.encrypted)) throw zipError('Encrypted CBZ entries cannot be safely converted. The archive was not changed.');
+    const localSorted = [...directory.entries].sort((a, b) => a.localOffset - b.localOffset);
+    if (localSorted.some((entry, index) => index && entry.localOffset === localSorted[index - 1].localOffset)) {
+        throw zipError('The CBZ shares local ZIP offsets between entries; converting it would be unsafe.');
+    }
+    if (localSorted.some(entry => entry.localOffset >= directory.directoryOffset)) throw zipError('CBZ entry offsets are invalid.');
+    const replacementIds = new Set(jxlPages.map(entry => entry.index));
+    const reservedNames = new Set(directory.entries.filter(entry => !replacementIds.has(entry.index)).map(entry => entry.name.toLowerCase()));
+    const chosenNames = new Set();
+    const tempPath = `${archivePath}.panelkeeper-jxl-${process.pid}-${crypto.randomBytes(5).toString('hex')}.tmp`;
+    let converted = 0;
+    let webp = 0;
+    let png = 0;
+    const convertedNames = new Map();
+    try {
+        await fsp.writeFile(tempPath, Buffer.alloc(0), { flag: 'wx' });
+        const centralByIndex = new Map();
+        let originalCursor = 0;
+        let targetCursor = 0;
+        for (let i = 0; i < localSorted.length; i++) {
+            const entry = localSorted[i];
+            const nextOffset = i + 1 < localSorted.length ? localSorted[i + 1].localOffset : directory.directoryOffset;
+            if (nextOffset <= entry.localOffset || entry.localOffset < originalCursor) throw zipError('Invalid ZIP local-entry ranges.');
+            if (entry.localOffset > originalCursor) {
+                await copyRange(archivePath, tempPath, originalCursor, entry.localOffset);
+                targetCursor += entry.localOffset - originalCursor;
+            }
+            const entryOffset = targetCursor;
+            if (replacementIds.has(entry.index)) {
+                const encoder = encodeEntry || (async current => {
+                    const { previewJxlEntry } = require('./jxl-preview-utils');
+                    return previewJxlEntry(module.exports, archivePath, current);
+                });
+                const output = await encoder(entry, archivePath);
+                if (!output || !['image/webp', 'image/png'].includes(output.contentType)) throw zipError(`No valid lossless output for ${entry.name}.`);
+                const bytes = Buffer.from(output.data || []);
+                if (!bytes.length || bytes.length > 160 * 1024 * 1024) throw zipError(`Encoded image is empty or exceeds the 160 MiB safety limit: ${entry.name}.`);
+                const isWebp = output.contentType === 'image/webp';
+                const isValidHeader = isWebp
+                    ? require('./jxl-preview-utils').isLosslessWebP(bytes)
+                    : bytes.length >= 8 && bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex'));
+                if (!isValidHeader) throw zipError(`The lossless encoder did not return a valid ${isWebp ? 'WebP VP8L' : 'PNG'} image for ${entry.name}.`);
+                const extension = isWebp ? '.webp' : '.png';
+                const outputName = entry.name.slice(0, -4) + extension;
+                const key = outputName.toLowerCase();
+                if (reservedNames.has(key) || chosenNames.has(key)) throw zipError(`Image conversion would collide with an existing CBZ page: ${outputName}. Original retained.`);
+                chosenNames.add(key);
+                const zipped = createStoredZipEntry(outputName, bytes);
+
+                const previousCentral = directory.centralBuffer.subarray(entry.centralStart, entry.centralEnd);
+                previousCentral.copy(zipped.localRecord,10,12,16);
+                previousCentral.copy(zipped.centralRecord,12,12,16);
+                zipped.centralRecord.writeUInt32LE(entryOffset,42);
+                await fsp.appendFile(tempPath, zipped.localRecord);
+                targetCursor += zipped.localRecord.length;
+                centralByIndex.set(entry.index, zipped.centralRecord);
+                convertedNames.set(entry.index, outputName);
+                converted++;
+                if (isWebp) webp++; else png++;
+                if (typeof onProgress === 'function') onProgress({ done: converted, total: jxlPages.length });
+            } else {
+                await copyRange(archivePath, tempPath, entry.localOffset, nextOffset);
+                const blockLength = nextOffset - entry.localOffset;
+                targetCursor += blockLength;
+                const central = Buffer.from(directory.centralBuffer.subarray(entry.centralStart, entry.centralEnd));
+                if (entryOffset > 0xffffffff) throw zipError('Updated CBZ would exceed standard ZIP offset limits.');
+                central.writeUInt32LE(entryOffset,42);
+                centralByIndex.set(entry.index,central);
+            }
+            originalCursor = nextOffset;
+        }
+        const directoryOffset = targetCursor;
+        const central = Buffer.concat([
+            ...directory.entries.map(entry => centralByIndex.get(entry.index)),
+            directory.centralBuffer.subarray(directory.centralParsedLength)
+        ]);
+        if (directoryOffset > 0xffffffff || central.length > 0xffffffff) throw zipError('Converted CBZ exceeds standard ZIP limits.');
+        await fsp.appendFile(tempPath, central);
+        const tailStart = directory.directoryOffset + directory.directorySize;
+        if (tailStart < directory.eocdAbsolute) await copyRange(archivePath, tempPath, tailStart, directory.eocdAbsolute);
+        const eocd = Buffer.from(directory.eocd);
+        eocd.writeUInt32LE(central.length,12);
+        eocd.writeUInt32LE(directoryOffset,16);
+        await fsp.appendFile(tempPath,eocd);
+        await fsp.appendFile(tempPath,directory.comment);
+
+        const check = await readZipDirectory(tempPath);
+        if (check.entries.length !== directory.entries.length) throw zipError('Converted CBZ entry count did not match.');
+        for (const entry of directory.entries) {
+            const actual = check.entries[entry.index];
+            const expected = convertedNames.get(entry.index);
+            if (expected) {
+                if (actual.name !== expected || actual.method !== 0) throw zipError(`Converted page verification failed: ${expected}.`);
+            } else if (actual.name !== entry.name || actual.crc32 !== entry.crc32 || actual.compressedSize !== entry.compressedSize || actual.method !== entry.method || actual.uncompressedSize !== entry.uncompressedSize) {
+                throw zipError(`Untouched ZIP entry metadata was changed unexpectedly: ${entry.name}.`);
+            }
+        }
+        const unchanged = await fsp.stat(archivePath);
+        if (unchanged.size !== directory.fileSize || unchanged.mtimeMs !== directory.mtimeMs) throw zipError('The source CBZ changed during conversion; no changes committed.');
+        if (typeof beforeCommit !== 'function') throw zipError('A Recovery snapshot callback is required before changing any CBZ.');
+        const recovery = await beforeCommit();
+        if (!recovery || !recovery.id) throw zipError('Recovery snapshot could not be verified; original CBZ was preserved.');
+
+        const swapPath = `${archivePath}.panelkeeper-jxl-old-${process.pid}-${crypto.randomBytes(4).toString('hex')}.bak`;
+        try {
+            await fsp.rename(archivePath,swapPath);
+            try { await fsp.rename(tempPath,archivePath); }
+            catch (error) { await fsp.rename(swapPath,archivePath).catch(() => {}); throw error; }
+            await fsp.unlink(swapPath).catch(() => {});
+        } catch (error) {
+            throw zipError(`The converted CBZ could not replace the original; a Recovery copy was retained: ${error.message}`);
+        }
+        return { changed: true, converted, webp, png, recoveryId: recovery.id };
+    } finally {
+        await fsp.unlink(tempPath).catch(() => {});
+    }
+}
+
 module.exports = {
     readZipDirectory,
     readComicInfoText,
     writeComicInfoInPlace,
     isComicInfo,
     imageEntries,
+    previewImageEntries,
     displayImageName,
     deleteEntryInPlace,
     reorderImageEntriesInPlace,
@@ -942,5 +1073,6 @@ module.exports = {
     removeManagedFirstImageInPlace,
     isManagedFirstImage,
     mimeTypeForImage,
+    convertJxlPagesInPlace,
     zipError
 };
