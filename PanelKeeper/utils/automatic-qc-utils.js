@@ -2,15 +2,17 @@
 
 const AUTO_QC_ACTION_KEYS = Object.freeze([
     'autoQCRepairNames',
+    'autoQCApplyGlobalIgnoresToLibrary',
     'autoQCOrganizeSpecials',
     'autoQCApplyComicInfo',
     'autoQCResolveDuplicates',
     'autoQCRouteToReview',
-    'autoQCRouteUnsupportedImages'
+    'autoQCRouteUnsupportedImages',
+    'autoQCConvertJxl'
 ]);
 
 const DEFAULT_AUTO_QC_ACTION_SETTINGS = Object.freeze(Object.fromEntries(
-    AUTO_QC_ACTION_KEYS.map(key => [key, key === 'autoQCRouteUnsupportedImages' ? 'false' : 'true'])
+    AUTO_QC_ACTION_KEYS.map(key => [key, ['autoQCRouteUnsupportedImages', 'autoQCConvertJxl'].includes(key) ? 'false' : 'true'])
 ));
 
 function getAutomaticQcActions(readSetting) {
@@ -20,12 +22,15 @@ function getAutomaticQcActions(readSetting) {
     return {
         repairNames,
 
+        applyGlobalIgnoresToLibrary: enabled('autoQCApplyGlobalIgnoresToLibrary'),
+
         organizeSpecials: repairNames && enabled('autoQCOrganizeSpecials'),
         applyComicInfo: enabled('autoQCApplyComicInfo'),
         resolveDuplicates: enabled('autoQCResolveDuplicates'),
         routeToReview: enabled('autoQCRouteToReview'),
 
-        routeUnsupportedImages: String(readSetting('autoQCRouteUnsupportedImages', 'false')).toLowerCase() === 'true'
+        routeUnsupportedImages: String(readSetting('autoQCRouteUnsupportedImages', 'false')).toLowerCase() === 'true',
+        convertJxl: String(readSetting('autoQCConvertJxl', 'false')).toLowerCase() === 'true'
     };
 }
 
@@ -42,7 +47,7 @@ function hasAutomaticQcActionableIssue(issues, actions, comicInfoPolicy) {
             case 'has_xml':
                 return actions.applyComicInfo && comicInfoPolicy !== 'leave';
             case 'unsupported_image_format':
-                return actions.routeUnsupportedImages;
+                return actions.routeUnsupportedImages || actions.convertJxl;
             case 'bad_archive':
             case 'unsupported_archive':
             case 'xml_cleanup_failed':
