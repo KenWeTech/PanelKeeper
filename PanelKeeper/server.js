@@ -7,6 +7,7 @@ const fs = require('fs-extra');
 const db = require('./database');
 const qcDb = require('./qc-database');
 const manager = require('./manager');
+const { isJxlPage, previewJxlEntry } = require('./utils/jxl-preview-utils');
 const { resolveSchedulerTimezone, schedulerDateValue, elapsedSecondsBetween, resolveElapsedSeconds, calculateNextCronRun, describeCronSchedule, parseScheduleStartTime, buildPresetCron, normalizeScheduleStartTime, cronRunsAtMidnight, inferSchedulePreset } = require('./utils/scheduler-utils');
 
 const app = express();
@@ -41,6 +42,15 @@ function sendError(res, error, status = 500) {
 }
 
 async function streamArchiveEntry(res, archivePage) {
+    if (isJxlPage(archivePage.entry.name)) {
+
+        const preview = await previewJxlEntry(manager.zip, archivePage.archivePath, archivePage.entry);
+        res.setHeader('Content-Type', preview.contentType);
+        res.setHeader('Content-Length', String(preview.data.length));
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.end(preview.data);
+        return;
+    }
     const stream = await manager.zip.createEntryReadStream(archivePage.archivePath, archivePage.entry);
     res.setHeader('Content-Type', manager.zip.mimeTypeForImage(archivePage.entry.name));
     if (path.extname(archivePage.entry.name).toLowerCase() === '.svg') {
@@ -324,7 +334,11 @@ function refreshScheduler() {
             manager.log(`Scheduled pipeline failed: ${error.message}`, 'ERROR');
         }
     }, { name: 'panelkeeper-pipeline', timezone, noOverlap: true });
-    manager.log(`Automation schedule active: ${describeCronSchedule(schedule)} (${schedule}; ${timezone}); next run ${scheduledNextRunAt || 'not available'}.`);
+    const preset = String(manager.getSetting('schedulePreset', '') || '');
+    const savedStart = String(manager.getSetting('scheduleStartTime', '') || '');
+    const configuredOffset = preset && !['off', 'custom'].includes(preset) && /^\d{2}:\d{2}$/.test(savedStart)
+        ? `; configured start/offset ${savedStart}` : '';
+    manager.log(`Automation schedule active: ${describeCronSchedule(schedule)}${configuredOffset} (${schedule}; ${timezone}); next run ${scheduledNextRunAt || 'not available'}.`);
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, running: manager.isPipelineRunning(), version: require('./package.json').version }));
@@ -424,7 +438,7 @@ app.post('/api/settings/schedule', (req, res) => {
         }
         saveSchedulerState({ schedulePreset: preset, scheduleStartTime: effectiveStartTime, cronSchedule: schedule });
         refreshScheduler();
-        manager.log(`Automation schedule updated: ${describeCronSchedule(schedule)} (${schedule}, ${getSchedulerTimezone()}).`);
+        manager.log(`Automation schedule updated: ${describeCronSchedule(schedule)}${preset !== 'custom' ? `; configured start/offset ${effectiveStartTime}` : ''} (${schedule}, ${getSchedulerTimezone()}).`);
         res.json({ success: true, preset, startTime: effectiveStartTime, cronSchedule: schedule, timezone: getSchedulerTimezone() });
     } catch (error) { sendError(res, error, 400); }
 });
@@ -655,6 +669,8 @@ app.get('/api/conflicts/filters', (req, res) => {
 
 app.get('/api/conflicts', asyncRoute(async (req, res) => {
     try {
+
+        manager.reconcileMissingConflicts(5000);
         await manager.reconcileQueuedChapterItems();
         manager.reconcileMissingConflicts(5000);
         const { page, limit, offset } = getPagination(req);
@@ -671,6 +687,7 @@ app.get('/api/conflicts', asyncRoute(async (req, res) => {
         res.json({ items: conflicts.map(item => ({
             ...item,
             ...manager.getConflictProposal(item),
+            source_location: manager.getConflictSourceLocation(item),
             source_exists: manager.getPathPresence(item.source_path),
             destination_exists: manager.getPathPresence(item.destination_path),
             source_basename: path.basename(item.source_path),
@@ -710,11 +727,12 @@ app.get('/api/conflicts/:id/compare', asyncRoute(async (req, res) => {
         manager.zip.readZipDirectory(conflict.source_path),
         manager.zip.readZipDirectory(conflict.destination_path)
     ]);
-    const sourcePages = manager.zip.imageEntries(sourceDirectory).map((entry, index) => ({ index, name: entry.name, size: entry.uncompressedSize }));
-    const libraryPages = manager.zip.imageEntries(libraryDirectory).map((entry, index) => ({ index, name: entry.name, size: entry.uncompressedSize }));
+    const sourcePages = manager.zip.previewImageEntries(sourceDirectory).map((entry, index) => ({ index, name: entry.name, size: entry.uncompressedSize }));
+    const libraryPages = manager.zip.previewImageEntries(libraryDirectory).map((entry, index) => ({ index, name: entry.name, size: entry.uncompressedSize }));
     res.json({
         conflict: {
             id: conflict.id,
+            source_location: manager.getConflictSourceLocation(conflict),
             target_series: conflict.target_series,
             chapter_label: conflict.chapter_label,
             source_name: path.basename(conflict.source_path),
@@ -737,22 +755,13 @@ app.get('/api/conflicts/:id/page/:side/:index', async (req, res) => {
         const filePath = side === 'source' ? conflict.source_path : conflict.destination_path;
         if (!fs.existsSync(filePath)) return res.status(404).end('Comparison file no longer exists.');
         const directory = await manager.zip.readZipDirectory(filePath);
-        const pages = manager.zip.imageEntries(directory);
+        const pages = manager.zip.previewImageEntries(directory);
         const index = Number(req.params.index);
         if (!Number.isInteger(index) || index < 0 || index >= pages.length) return res.status(404).end('Page not found.');
         const entry = pages[index];
-        const stream = await manager.zip.createEntryReadStream(filePath, entry);
-        res.setHeader('Content-Type', manager.zip.mimeTypeForImage(entry.name));
-        res.setHeader('Content-Length', String(entry.uncompressedSize));
-        res.setHeader('Cache-Control', 'private, max-age=3600');
-        stream.on('error', error => {
-            manager.log(`Comparison preview failed for ${path.basename(filePath)} (${entry.name}): ${error.message}`, 'WARN');
-            if (!res.headersSent) res.status(500);
-            res.destroy(error);
-        });
-        stream.pipe(res);
+        await streamArchiveEntry(res, { archivePath: filePath, entry });
     } catch (error) {
-        if (!res.headersSent) res.status(error.code === 'ZIP_FORMAT_ERROR' ? 422 : 500).end(error.message);
+        if (!res.headersSent) res.status(error.status || (error.code === 'ZIP_FORMAT_ERROR' ? 422 : 500)).end(error.message);
         else res.destroy(error);
     }
 });
@@ -767,9 +776,98 @@ app.get('/api/issues/:id/pages/:index', asyncRoute(async (req, res) => streamArc
 app.delete('/api/issues/:id/pages/:entryIndex', asyncRoute(async (req, res) => res.json(await manager.deleteIssueArchivePage(req.params.id, req.params.entryIndex))));
 app.post('/api/issues/:id/pages/reorder', asyncRoute(async (req, res) => res.json(await manager.reorderIssueArchivePages(req.params.id, req.body?.entryOrder))));
 
+function addAttentionIssueFilter(conditions, params, rawIssue) {
+    const issue = String(rawIssue || '').trim().slice(0, 80);
+    if (!issue) return;
+    if (issue === '__jxl__') {
+        conditions.push("kind='unsupported_image_format'", "lower(reason) LIKE '%jxl%'");
+    } else if (/^[a-z][a-z0-9_]{0,79}$/.test(issue)) {
+        conditions.push('kind = ?');
+        params.push(issue);
+    }
+}
+
+let jxlConversionJob = null;
+function attentionIdsForConversion(body) {
+    let ids = Array.isArray(body?.ids) ? body.ids.map(Number).filter(id => Number.isSafeInteger(id) && id > 0) : [];
+    if (body?.allFiltered === true) {
+        const conditions = ["status='pending'", "kind='unsupported_image_format'", "lower(reason) LIKE '%jxl%'"];
+        const params = [];
+        const search = String(body.search ?? '').slice(0,200);
+        const series = String(body.series || '').trim().slice(0,200);
+        if (series === '__unmapped__') conditions.push("(target_series IS NULL OR target_series='')");
+        else if (series) { conditions.push('target_series=?'); params.push(series); }
+        addAttentionIssueFilter(conditions, params, body.issue);
+        addPatternSearch(conditions, params, search, ['path','kind','reason','target_series']);
+        ids = db.prepare(`SELECT id FROM file_issues WHERE ${conditions.join(' AND ')} ORDER BY id LIMIT 1001`).all(...params).map(row => row.id);
+    }
+    ids = [...new Set(ids)];
+    if (ids.length > 1000) throw Object.assign(new Error('Convert at most 1,000 Attention CBZs per batch; narrow the filter and retry.'), {status:413});
+    if (!ids.length) throw new Error('No JXL Attention records were selected.');
+    return ids;
+}
+app.post('/api/issues/convert-jxl', asyncRoute(async (req,res) => {
+    if (jxlConversionJob?.status === 'running') return res.status(409).json({error:'Another JXL conversion batch is running. Check its progress first.'});
+    const ids = attentionIdsForConversion(req.body || {});
+    const job = {
+        id: `jxl-${Date.now()}`, status:'running', total:ids.length, done:0,
+        converted:0, skipped:0, failed:0, pages:0, webp:0, png:0,
+        cancelRequested:false, lastFile:'', firstError:'', startedAt:new Date().toISOString()
+    };
+    jxlConversionJob = job;
+    manager.log(`[JXL BATCH START] Started ${ids.length} selected Attention CBZ(s); each archive will be verified and backed up before replacement.`);
+    setImmediate(async () => {
+        try {
+            for (const id of ids) {
+                if (job.cancelRequested) break;
+                try {
+                    const issue = db.prepare("SELECT path,kind,reason FROM file_issues WHERE id=? AND status='pending'").get(id);
+                    if (!issue || issue.kind !== 'unsupported_image_format') { job.skipped++; continue; }
+                    job.lastFile = path.basename(issue.path);
+                    const result = await manager.convertJxlAttentionIssue(id);
+                    if (result.changed) {
+                        job.converted++;
+                        job.pages += result.converted;
+                        job.webp += result.webp;
+                        job.png += result.png;
+                    } else { job.skipped++; await recheckIssueRecord(id); }
+                } catch (error) {
+                    job.failed++;
+                    if (!job.firstError) job.firstError = `#${id}: ${error.message}`;
+                    manager.log(`[JXL BATCH] Attention #${id}: ${error.message}`, 'WARN');
+                } finally {
+                    job.done++;
+                }
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            job.status = job.cancelRequested ? 'cancelled' : 'completed';
+        } catch (error) {
+            job.status = 'failed';
+            job.firstError = error.message;
+        } finally {
+            job.finishedAt = new Date().toISOString();
+            manager.log(`[JXL BATCH] ${job.status}: ${job.converted} CBZ(s) converted, ${job.pages} JXL page(s), ${job.skipped} skipped, ${job.failed} failed.`);
+        }
+    });
+    res.status(202).json({jobId:job.id,total:job.total});
+}));
+app.get('/api/issues/convert-jxl/status', (req,res) => {
+    res.json(jxlConversionJob ? {...jxlConversionJob} : {status:'idle'});
+});
+app.post('/api/issues/convert-jxl/dismiss', (req,res) => {
+    if (jxlConversionJob?.status !== 'running') jxlConversionJob = null;
+    res.json({success:true});
+});
+app.post('/api/issues/convert-jxl/cancel', (req,res) => {
+    if (jxlConversionJob?.status === 'running') jxlConversionJob.cancelRequested = true;
+    res.json({success:true,status:jxlConversionJob?.status || 'idle'});
+});
+
 app.get('/api/issues/filters', (req, res) => {
-    try { res.json({ series: manager.getIssueSeriesFilters() }); }
-    catch (error) { sendError(res, error); }
+    try {
+        const kinds = db.prepare("SELECT kind, COUNT(*) AS count FROM file_issues WHERE status='pending' GROUP BY kind").all();
+        res.json({ series: manager.getIssueSeriesFilters(), kinds });
+    } catch (error) { sendError(res, error); }
 });
 
 app.get('/api/issues', asyncRoute(async (req, res) => {
@@ -780,6 +878,7 @@ app.get('/api/issues', asyncRoute(async (req, res) => {
         const series = String(req.query.series || '').trim().slice(0, 200);
         const conditions = ["status='pending'"];
         const params = [];
+        addAttentionIssueFilter(conditions, params, req.query.issue);
         if (series === '__unmapped__') conditions.push("(target_series IS NULL OR target_series='')");
         else if (series) { conditions.push('target_series = ?'); params.push(series); }
         addPatternSearch(conditions, params, search, ['path', 'kind', 'reason', 'target_series']);
@@ -921,6 +1020,7 @@ app.post('/api/issues/bulk', asyncRoute(async (req, res) => {
         const params = [];
         if (series === '__unmapped__') conditions.push("(target_series IS NULL OR target_series='')");
         else if (series) { conditions.push('target_series = ?'); params.push(series); }
+        addAttentionIssueFilter(conditions, params, req.body.issue);
         addPatternSearch(conditions, params, search, ['path', 'kind', 'reason', 'target_series']);
         ids = db.prepare(`SELECT id FROM file_issues WHERE ${conditions.join(' AND ')} ORDER BY id LIMIT 5001`).all(...params).map(row => row.id);
         if (ids.length > 5000) return sendError(res, new Error('Bulk Attention actions are limited to 5,000 items at a time. Narrow the filters and run another batch.'), 413);
@@ -1027,11 +1127,11 @@ app.get('/api/qc/results', (req, res) => {
 });
 
 app.post('/api/qc/dismiss', (req, res) => {
-    try { res.json(manager.dismissQcIssue(req.body?.path)); }
+    try { res.json(manager.dismissQcIssue(req.body?.path, req.body?.issues, req.body?.size, req.body?.mtime)); }
     catch (error) { sendError(res, error, 400); }
 });
 app.post('/api/qc/dismiss/bulk', (req, res) => {
-    try { res.json(manager.dismissQcIssues(req.body?.paths)); }
+    try { res.json(manager.dismissQcIssues(req.body?.items)); }
     catch (error) { sendError(res, error, 400); }
 });
 
@@ -1172,14 +1272,7 @@ app.get('/api/covers/preview-image', asyncRoute(async (req, res) => {
     }
     if (kind === 'chapter') {
         const page = await manager.getCoverPreviewPage(series, String(req.query.chapter || ''), req.query.index);
-        res.setHeader('Content-Type', page.mimeType);
-        res.setHeader('Cache-Control', 'no-store');
-        const stream = await manager.zip.createEntryReadStream(page.archivePath, page.entry);
-        stream.on('error', error => {
-            if (!res.headersSent) sendError(res, error);
-            else res.destroy(error);
-        });
-        return stream.pipe(res);
+        return streamArchiveEntry(res, page);
     }
     return sendError(res, new Error('Unknown cover preview type.'), 400);
 }));
@@ -1310,7 +1403,7 @@ app.post('/api/run', asyncRoute(async (req, res) => {
 app.use((error, req, res, next) => {
     manager.log(`API error (${req.method} ${req.path}): ${error.stack || error.message}`, 'ERROR');
     if (res.headersSent) return next(error);
-    sendError(res, error, error.statusCode || 500);
+    sendError(res, error, error.status || error.statusCode || 500);
 });
 
 const server = app.listen(PORT, () => {
