@@ -67,6 +67,16 @@ qcDb.exec(`
         dismissed_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS qc_dismissed_issues (
+        path TEXT NOT NULL,
+        issue TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime INTEGER NOT NULL,
+        dismissed_at TEXT NOT NULL,
+        PRIMARY KEY (path, issue)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_qc_dismissed_issues_path ON qc_dismissed_issues(path, size, mtime);
     CREATE INDEX IF NOT EXISTS idx_qc_cache_has_issues ON qc_cache(has_issues, path);
     CREATE INDEX IF NOT EXISTS idx_qc_runs_root_status ON qc_scan_runs(root, status, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_qc_scan_dirs_queue ON qc_scan_dirs(run_id, status, id);
