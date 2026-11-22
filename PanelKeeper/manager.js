@@ -33,6 +33,9 @@ let pipelinePromise = null;
 let pipelineGeneration = 0;
 
 const pipelineQcCandidates = new Set();
+
+const conflictQcCandidates = new Set();
+let pipelineQcExistingFindingsRequested = false;
 let pipelineQcWorkerRunning = false;
 let pipelineQcWorkerRequested = false;
 
@@ -182,7 +185,8 @@ function setGlobalIgnoredTerms(inputTerms) {
     seriesIgnoredTermsCache.clear();
 
     const qcFilesMarkedForRecheck = Number(qcDb.prepare('UPDATE qc_cache SET parser_version=0').run().changes || 0);
-    const invalidatedDismissals = Number(qcDb.prepare('DELETE FROM qc_dismissed').run().changes || 0);
+    const invalidatedDismissals = Number(qcDb.prepare('DELETE FROM qc_dismissed').run().changes || 0)
+        + Number(qcDb.prepare('DELETE FROM qc_dismissed_issues').run().changes || 0);
     db.prepare('UPDATE library_series_state SET last_scanned_at=NULL, updated_at=?').run(now);
     log(`Updated global ignored chapter filename terms: ${terms.length} term(s); ${qcFilesMarkedForRecheck} QC result(s) marked for recheck; ${invalidatedDismissals} prior QC dismissal(s) reset.`);
     return { terms: [...terms], changed: true, qcFilesMarkedForRecheck, invalidatedDismissals };
@@ -196,6 +200,7 @@ function invalidateSeriesQcCache(series) {
     const cacheChanges = qcDb.prepare('DELETE FROM qc_cache WHERE substr(path, 1, length(?)) = ? COLLATE NOCASE').run(prefix, prefix).changes;
 
     qcDb.prepare('DELETE FROM qc_dismissed WHERE substr(path, 1, length(?)) = ? COLLATE NOCASE').run(prefix, prefix);
+    qcDb.prepare('DELETE FROM qc_dismissed_issues WHERE substr(path, 1, length(?)) = ? COLLATE NOCASE').run(prefix, prefix);
     db.prepare('UPDATE library_series_state SET last_scanned_at=NULL, updated_at=? WHERE lower(series)=lower(?)')
         .run(new Date().toISOString(), String(series));
     return cacheChanges;
@@ -238,14 +243,15 @@ function renameSeriesIgnoredTerms(oldName, newName) {
     seriesIgnoredTermsCache.delete(oldKey);
 }
 
-function parseSeriesChapter(filename, series, modeOverride = null) {
+function parseSeriesChapter(filename, series, modeOverride = null, ignoredTermsOverride = null) {
     const volumeMode = VALID_VOLUME_MODES.has(String(modeOverride || '')) ? String(modeOverride) : getSeriesVolumeMode(series);
-    const options = { volumeMode, ignoredTerms: getEffectiveIgnoredTerms(series) };
+    const options = { volumeMode, ignoredTerms: ignoredTermsOverride === null ? getEffectiveIgnoredTerms(series) : ignoredTermsOverride };
     return parseChapter(filename, series, options) || parseChapter(filename, '', options);
 }
 
-function parseSeriesChapterLabel(label, series) {
-    return parseChapterLabel(label, { volumeMode: getSeriesVolumeMode(series), ignoredTerms: getEffectiveIgnoredTerms(series) });
+function parseSeriesChapterLabel(label, series, ignoredTermsOverride = null) {
+    return parseChapterLabel(label, { volumeMode: getSeriesVolumeMode(series),
+        ignoredTerms: ignoredTermsOverride === null ? getEffectiveIgnoredTerms(series) : ignoredTermsOverride });
 }
 
 function resolveChapterOverride(parsedFromFilename, parsedOverride, override, series) {
@@ -388,6 +394,40 @@ function getKavitaSeriesCoverPath(seriesPath) {
         });
         return matches[0] || preferredPath;
     } catch (_) { return preferredPath; }
+}
+
+async function finalizeKavitaCoverReplacement(seriesPath, series, coverPath) {
+    const legacyPaths = (await fs.readdir(seriesPath, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && isKavitaSeriesCoverName(entry.name)
+            && COVER_EXT_PATTERN.test(entry.name)
+            && path.resolve(seriesPath, entry.name) !== path.resolve(coverPath))
+        .map(entry => path.resolve(seriesPath, entry.name));
+    if (!legacyPaths.length) return [];
+
+    const updates = [
+        ['series_cover_rules', 'cover_path', 'target_series'],
+        ['series_chapter_cover_designs', 'source_path', 'target_series']
+    ];
+    const now = new Date().toISOString();
+    db.transaction(() => {
+        for (const [table, column, owner] of updates) {
+            const row = db.prepare(`SELECT ${column} AS old_path FROM ${table} WHERE lower(${owner})=lower(?)`).get(series);
+            if (row?.old_path && legacyPaths.some(file => samePath(file, row.old_path))) {
+                db.prepare(`UPDATE ${table} SET ${column}=?, updated_at=? WHERE lower(${owner})=lower(?)`)
+                    .run(coverPath, now, series);
+            }
+        }
+        const jobs = db.prepare("SELECT id, cover_path FROM cover_update_jobs WHERE lower(series)=lower(?) AND status IN ('queued','running')").all(series);
+        for (const job of jobs) {
+            if (job.cover_path && legacyPaths.some(file => samePath(file, job.cover_path))) {
+                db.prepare('UPDATE cover_update_jobs SET cover_path=?, updated_at=? WHERE id=?')
+                    .run(coverPath, now, job.id);
+            }
+        }
+    })();
+
+    for (const file of legacyPaths) await fs.remove(file);
+    return legacyPaths;
 }
 
 function coverCandidateRank(name) {
@@ -576,6 +616,7 @@ function getKavitaConnectionStatus() {
     return { baseUrl: config.baseUrl, hasApiKey: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.apiKey) };
 }
 
+let kavitaImageCompatibilityLogged = false;
 async function kavitaApiRequest(route, { config = getKavitaConnectionConfig(), image = false } = {}) {
     if (!config.baseUrl || !config.apiKey) throw new Error('Configure and test your Kavita URL and API key first.');
     const target = new URL(`${config.baseUrl}${route.startsWith('/') ? route : `/${route}`}`);
@@ -601,7 +642,10 @@ async function kavitaApiRequest(route, { config = getKavitaConnectionConfig(), i
     if (legacyImageApiKeyRequired) {
         const legacyTarget = new URL(target);
         legacyTarget.searchParams.set('apiKey', config.apiKey);
-        log('[KAVITA] Older ImageController requires its legacy apiKey query argument; retrying the series-cover request with server-side compatibility handling.');
+        if (!kavitaImageCompatibilityLogged) {
+            log('[KAVITA] Cover request used compatibility handling for an older Kavita version.');
+            kavitaImageCompatibilityLogged = true;
+        }
         response = await sendRequest(legacyTarget);
         errorDetail = '';
         if (!response.ok) errorDetail = (await response.text().catch(() => '')).slice(0, 300);
@@ -710,7 +754,7 @@ async function fetchKavitaSeriesCoverImage(kavitaSeriesId) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Choose a valid Kavita series first.');
     const downloaded = await kavitaApiRequest(`/api/Image/series-cover?seriesId=${encodeURIComponent(id)}`, { image: true });
     return sharp(downloaded, { failOn: 'error', limitInputPixels: 80000000 })
-        .rotate().webp({ quality: 95, effort: 6 }).toBuffer();
+        .rotate().webp({ lossless: true, effort: 6 }).toBuffer();
 }
 
 async function getKavitaSeriesCoverPreview(kavitaSeriesId) {
@@ -751,6 +795,7 @@ async function saveKavitaSeriesCoverSource(series, enabled, kavitaSeriesId = nul
         }
     }
 
+    if (shouldEnable) await finalizeKavitaCoverReplacement(seriesPath, target.value, coverPath);
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO series_kavita_cover_sources (target_series, enabled, kavita_series_id, kavita_series_name, last_job_id, updated_at)
         VALUES (?, ?, ?, ?, '', ?) ON CONFLICT(target_series) DO UPDATE SET enabled=excluded.enabled,
@@ -838,6 +883,7 @@ async function downloadKavitaMainCover(series, kavitaSeriesId = null, kavitaSeri
         throw new Error(`Kavita returned the manga cover, but PanelKeeper could not save it: ${error.message}`);
     }
 
+    const replacedLegacyPaths = await finalizeKavitaCoverReplacement(seriesPath, target.value, coverPath);
     rememberMatch();
     log(`[KAVITA COVER DOWNLOAD] ${existingCoverAvailable ? 'Replaced' : 'Saved'} standalone main manga cover for ${target.value} from Kavita series ${resolvedId} (${imageHash.slice(0, 12)}). Auto Cover and chapter archives were not changed.`);
     return {
@@ -849,6 +895,7 @@ async function downloadKavitaMainCover(series, kavitaSeriesId = null, kavitaSeri
         coverFileName: KAVITA_SERIES_COVER_FILENAME,
         coverFileAvailable: true,
         coverPath,
+        replacedLegacyPaths,
         autoCoverEnabled: Boolean(previous?.autoCoverEnabled),
         sourceEnabled: Boolean(previous?.enabled),
         coverHash: imageHash,
@@ -892,7 +939,7 @@ async function setKavitaAutoCover(series, enabled, forceRefresh = false, selecte
     const requestedName = String(selectedKavitaSeriesName || linkedSource?.kavitaSeriesName || '').trim().slice(0, 300);
     const linkChanged = Number(linkedSource?.kavitaSeriesId || 0) !== requestedId;
     const coverExists = await fs.pathExists(kavitaCoverPath);
-    const needsFetch = Boolean(forceRefresh || linkChanged || !coverExists);
+    const needsFetch = Boolean(forceRefresh || linkChanged || !coverExists || path.extname(kavitaCoverPath).toLowerCase() !== '.webp');
 
     if (needsFetch) {
         await saveKavitaSeriesCoverSource(target.value, true, requestedId, requestedName);
@@ -1639,7 +1686,7 @@ async function getCoverPreview(series, chapterName = '', coverPathOverride = '',
         const chapterPath = path.resolve(seriesPath, selectedChapter);
         if (!isWithin(seriesPath, chapterPath) || path.dirname(chapterPath) !== seriesPath) throw new Error('Invalid chapter preview path.');
         const directory = await zip.readZipDirectory(chapterPath);
-        chapterPages = zip.imageEntries(directory).slice(0, 4).map(entry => ({ index: entry.index, name: entry.name }));
+        chapterPages = zip.previewImageEntries(directory).slice(0, 4).map(entry => ({ index: entry.index, name: entry.name }));
     }
     return {
         series: target.value,
@@ -1677,7 +1724,7 @@ async function getCoverPreviewPage(series, chapterName, pageIndex) {
     }
     const directory = await zip.readZipDirectory(chapterPath);
     const index = Number.parseInt(pageIndex, 10);
-    const entry = zip.imageEntries(directory).find(item => item.index === index);
+    const entry = zip.previewImageEntries(directory).find(item => item.index === index);
     if (!entry) throw new Error('Chapter preview page was not found.');
     return { archivePath: chapterPath, entry, mimeType: zip.mimeTypeForImage(entry.name) };
 }
@@ -2102,7 +2149,7 @@ async function sendNotification(message, options = {}) {
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/plain, */*',
-                'User-Agent': 'PanelKeeper/1.10.39'
+                'User-Agent': 'PanelKeeper/1.11.7'
             },
             body: JSON.stringify(payload),
             signal: AbortSignal.timeout(12000),
@@ -3803,7 +3850,7 @@ async function renameLibrarySeriesCaseOnly(oldName, newName) {
         }
         try {
             const updateQc = qcDb.transaction(() => {
-                for (const [table, column] of [['qc_cache','path'], ['qc_dismissed','path'], ['qc_scan_dirs','path']]) {
+                for (const [table, column] of [['qc_cache','path'], ['qc_dismissed','path'], ['qc_dismissed_issues','path'], ['qc_scan_dirs','path']]) {
                     const rows = qcDb.prepare(`SELECT rowid AS id, "${column}" AS value FROM "${table}" WHERE substr("${column}",1,length(?))=?`).all(oldPrefix,oldPrefix);
                     const update = qcDb.prepare(`UPDATE "${table}" SET "${column}"=? WHERE rowid=?`);
                     for (const row of rows) update.run(path.join(desiredRoot,path.relative(previousRoot,row.value)),row.id);
@@ -4225,9 +4272,9 @@ async function renameLibraryChapter(series, filePath, chapterInput) {
     }
 }
 
-function parseQcChapterPath(filePath, series) {
+function parseQcChapterPath(filePath, series, ignoredTermsOverride = null) {
     const base = portableBasename(filePath);
-    const parsed = parseSeriesChapter(base, series);
+    const parsed = parseSeriesChapter(base, series, null, ignoredTermsOverride);
     const { destRoot } = getRoots();
     if (!destRoot || !series) return parsed;
     const specialsPath = path.join(path.resolve(destRoot, series), 'Specials');
@@ -4238,8 +4285,8 @@ function parseQcChapterPath(filePath, series) {
     const escaped = String(series).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     title = title.replace(new RegExp(`^${escaped}\\s*[-_: ]*`, 'i'), '').trim();
     title = title.replace(/^(?:chapter|chap|chp|ch|c|episode|ep)\s*\.?\s*\d+(?:\.\d+)?[a-z]?\s*[-_: ]*/i, '').trim();
-    if (!title) return parseSeriesChapterLabel('Special', series);
-    return parseSeriesChapterLabel(`Special - ${title}`, series) || {
+    if (!title) return parseSeriesChapterLabel('Special', series, ignoredTermsOverride);
+    return parseSeriesChapterLabel(`Special - ${title}`, series, ignoredTermsOverride) || {
         label: `Special ${title}`,
         key: `special:${slugSpecialKey(title)}`,
         number: null,
@@ -4265,7 +4312,7 @@ async function hashFile(filePath) {
     });
 }
 
-async function collectDirectoryDuplicateGroups(dirPath, destRoot, generationAtStart) {
+async function collectDirectoryDuplicateGroups(dirPath, destRoot, generationAtStart, { useGlobalIgnoredTerms = true } = {}) {
     const groups = new Map();
     let visited = 0;
     if (!(await fs.pathExists(dirPath))) return { groups, interrupted: false };
@@ -4275,7 +4322,8 @@ async function collectDirectoryDuplicateGroups(dirPath, destRoot, generationAtSt
         if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.cbz') continue;
         const filePath = path.join(dirPath, entry.name);
         const series = seriesNameFromPath(filePath, destRoot);
-        const chapter = parseSeriesChapter(entry.name, series);
+        const chapter = parseSeriesChapter(entry.name, series, null,
+            useGlobalIgnoredTerms ? null : getSeriesIgnoredTerms(series));
         if (chapter) {
             const group = groups.get(chapter.key) || [];
             group.push({
@@ -4339,7 +4387,7 @@ async function flagDirectoryDuplicateCandidates(groups, { generationAtStart } = 
     return { interrupted: false };
 }
 
-async function processDirectoryDuplicateGroups(groups, { generationAtStart, allowRenames = true, allowReviewRouting = true } = {}) {
+async function processDirectoryDuplicateGroups(groups, { generationAtStart, allowRenames = true, allowReviewRouting = true, applyGlobalIgnoresToLibrary = true } = {}) {
     const { destRoot } = getRoots();
     if (!destRoot) return { archived: 0, flagged: 0, interrupted: false };
     let archived = 0;
@@ -4456,7 +4504,10 @@ async function processDirectoryDuplicateGroups(groups, { generationAtStart, allo
         if (hasCopyCounter && allowRenames && keepers[0]) {
             const keeper = keepers[0];
             const keeperSeriesPath = path.resolve(destRoot, keeper.series);
-            const canonicalPath = buildChapterDestination(keeperSeriesPath, keeper.series, { ...keeper.chapter }).path;
+            const keeperChapter = applyGlobalIgnoresToLibrary ? keeper.chapter
+                : parseSeriesChapter(path.basename(keeper.path), keeper.series, null, getSeriesIgnoredTerms(keeper.series));
+            if (!keeperChapter) continue;
+            const canonicalPath = buildChapterDestination(keeperSeriesPath, keeper.series, { ...keeperChapter }).path;
             if (!samePath(keeper.path, canonicalPath) && !(await fs.pathExists(canonicalPath))) {
                 await yieldToPipeline();
                 if (pipelinePromise || activeQcMutations > 0 || (generationAtStart !== undefined && pipelineGeneration !== generationAtStart)) {
@@ -4709,8 +4760,7 @@ async function scanLibraryHealth({ runId, onProgress = null, useCache = true, au
     }
 
     const finalIssueCount = qcDb.prepare(`SELECT COUNT(*) AS count FROM qc_cache
-        WHERE has_issues=1 AND NOT EXISTS (SELECT 1 FROM qc_dismissed d
-            WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)`).get().count;
+        WHERE ${QC_VISIBLE_PREDICATE}`).get().count;
     issueCount = finalIssueCount;
     updateProgress.run(done, issueCount, cacheHits, repaired, new Date().toISOString(), runId);
     log(`QC scan complete: ${done} CBZ file(s) visited, ${issueCount} current cached issue(s), ${cacheHits} cached metadata result(s), ${repaired} repair action(s).`);
@@ -4848,11 +4898,34 @@ function filterQcIssuesHandledByReviewQueues(filePath, issueList) {
     return [...filtered];
 }
 
+const QC_VISIBLE_PREDICATE = `qc_cache.has_issues=1
+    AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path
+        AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)
+    AND EXISTS (SELECT 1 FROM json_each(qc_cache.issues) AS issue
+        WHERE NOT EXISTS (SELECT 1 FROM qc_dismissed_issues di
+            WHERE di.path=qc_cache.path AND di.issue=issue.value
+              AND di.size=qc_cache.size AND di.mtime=qc_cache.mtime))`;
+
+function qcIssueIsVisibleSql(issueExpression = 'issue.value') {
+    return `EXISTS (SELECT 1 FROM json_each(qc_cache.issues) AS issue
+        WHERE ${issueExpression} AND NOT EXISTS (SELECT 1 FROM qc_dismissed_issues di
+            WHERE di.path=qc_cache.path AND di.issue=issue.value
+                AND di.size=qc_cache.size AND di.mtime=qc_cache.mtime))`;
+}
+
+const getActiveIssuesForFile = qcDb.prepare(
+    'SELECT issue FROM qc_dismissed_issues WHERE path=? AND size=? AND mtime=?'
+);
+function filterDismissedQcIssues(filePath, size, mtime, issues) {
+    if (!Array.isArray(issues) || !issues.length) return [];
+    const dismissed = new Set(getActiveIssuesForFile.all(filePath, size, mtime).map(row => row.issue));
+    return issues.filter(issue => !dismissed.has(issue));
+}
+
 function getQcIssueSummary() {
-    const activeFilter = `has_issues=1 AND NOT EXISTS (SELECT 1 FROM qc_dismissed d
-        WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)`;
-    const cachedPaths = issue => qcDb.prepare(`SELECT path FROM qc_cache WHERE ${activeFilter} AND issues LIKE ?`)
-        .all(`%\"${issue}\"%`).map(row => path.resolve(row.path));
+    const activeFilter = QC_VISIBLE_PREDICATE;
+    const cachedPaths = issue => qcDb.prepare(`SELECT path FROM qc_cache WHERE ${activeFilter} AND ${qcIssueIsVisibleSql('issue.value=?')}`)
+        .all(issue).map(row => path.resolve(row.path));
     const countCached = issue => cachedPaths(issue).length;
     const total = Number(qcDb.prepare(`SELECT COUNT(*) AS count FROM qc_cache WHERE ${activeFilter}`).get()?.count || 0);
     const naming = countCached('bad_name') + countCached('unparsed_chapter');
@@ -4894,14 +4967,12 @@ function getSeriesPendingCounts() {
     const { destRoot } = getRoots();
     if (destRoot) {
         const qcCounts = qcDb.prepare(`SELECT pk_path_series(path, ?) AS series, COUNT(*) AS count
-            FROM qc_cache WHERE has_issues=1
-              AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)
+            FROM qc_cache WHERE ${QC_VISIBLE_PREDICATE}
             GROUP BY series HAVING series <> ''`).all(destRoot);
         for (const row of qcCounts) counts.set(row.series, (counts.get(row.series) || 0) + Number(row.count || 0));
 
         const issueRows = db.prepare("SELECT path, target_series FROM file_issues WHERE status='pending'").all();
-        const qcPathExists = qcDb.prepare(`SELECT 1 FROM qc_cache WHERE lower(path)=lower(?) AND has_issues=1
-            AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime) LIMIT 1`);
+        const qcPathExists = qcDb.prepare(`SELECT 1 FROM qc_cache WHERE lower(path)=lower(?) AND ${QC_VISIBLE_PREDICATE} LIMIT 1`);
         for (const row of issueRows) {
             if (qcPathExists.get(row.path)) continue;
             const series = row.target_series || inferSeriesForFilePath(row.path) || '';
@@ -4930,8 +5001,7 @@ function getQcSeriesFilters() {
     if (!destRoot) return [];
 
     return qcDb.prepare(`SELECT pk_path_series(path, ?) AS name, COUNT(*) AS count
-        FROM qc_cache WHERE has_issues=1
-          AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)
+        FROM qc_cache WHERE ${QC_VISIBLE_PREDICATE}
         GROUP BY name HAVING name <> '' ORDER BY pk_natural_key(name)`).all(destRoot);
 }
 
@@ -5321,7 +5391,7 @@ async function getArchivePageList(filePath, series = '') {
         managedCover: zip.isManagedFirstImage(entry.name),
         extension: path.extname(entry.name).toLowerCase(),
         unsupportedFormat: !isSupportedPageExtension(path.extname(entry.name)),
-        previewable: ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp', '.svg', '.ico'].includes(path.extname(entry.name).toLowerCase())
+        previewable: ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp', '.svg', '.ico', '.jxl'].includes(path.extname(entry.name).toLowerCase())
     }));
     return {
         fileName: path.basename(filePath),
@@ -5432,6 +5502,7 @@ function resolveArchiveEditorTarget(kind, id) {
 async function deleteArchivePage(kind, id, entryIndex) {
     const resolved = resolveArchiveEditorTarget(kind, id);
     const filePath = resolved.fullPath;
+    if (activeJxlConversions.has(pathKey(filePath))) throw new Error('This CBZ is currently being converted. Try again after the conversion finishes.');
     await yieldToPipeline();
     beginQcMutation();
     try {
@@ -5456,6 +5527,7 @@ async function deleteArchivePage(kind, id, entryIndex) {
 async function reorderArchivePages(kind, id, orderedEntryIndices) {
     const resolved = resolveArchiveEditorTarget(kind, id);
     const filePath = resolved.fullPath;
+    if (activeJxlConversions.has(pathKey(filePath))) throw new Error('This CBZ is currently being converted. Try again after the conversion finishes.');
     await yieldToPipeline();
     beginQcMutation();
     try {
@@ -5525,36 +5597,54 @@ function clearStaleSpecialQcCacheFlags() {
     return changed;
 }
 
-function dismissQcIssue(filePath) {
+function dismissQcIssue(filePath, issueNames, expectedSize, expectedMtime) {
     const target = String(filePath || '').trim();
     if (!target) throw new Error('A QC file path is required.');
-    const row = qcDb.prepare('SELECT size, mtime FROM qc_cache WHERE path=? AND has_issues=1').get(target);
-    if (!row) throw new Error('This QC finding is no longer active. Refresh the results.');
-    qcDb.prepare(`INSERT INTO qc_dismissed(path,size,mtime,dismissed_at) VALUES(?,?,?,?)
-        ON CONFLICT(path) DO UPDATE SET size=excluded.size,mtime=excluded.mtime,dismissed_at=excluded.dismissed_at`)
-        .run(target, row.size, row.mtime, new Date().toISOString());
-    return { success: true };
+    if (!Array.isArray(issueNames) || !issueNames.length) throw new Error('Select which QC issue types to mark Not an Issue.');
+    const row = qcDb.prepare('SELECT size, mtime, issues FROM qc_cache WHERE path=? AND has_issues=1').get(target);
+    if (!row || Number(row.size) !== Number(expectedSize) || Number(row.mtime) !== Number(expectedMtime)) {
+        throw new Error('This QC finding has changed since it was displayed. Refresh the results.');
+    }
+    const current = new Set(JSON.parse(row.issues || '[]'));
+    const selected = [...new Set(issueNames.map(name => String(name || '')))].filter(Boolean);
+    if (selected.some(name => !current.has(name))) throw new Error('Some selected issue types are no longer on this file. Refresh QC results.');
+    const save = qcDb.prepare(`INSERT INTO qc_dismissed_issues(path,issue,size,mtime,dismissed_at)
+        VALUES(?,?,?,?,?) ON CONFLICT(path,issue) DO UPDATE SET
+        size=excluded.size,mtime=excluded.mtime,dismissed_at=excluded.dismissed_at`);
+    const now = new Date().toISOString();
+    qcDb.transaction(() => { for (const issue of selected) save.run(target, issue, row.size, row.mtime, now); })();
+    return { success: true, dismissed: selected.length, remaining: current.size - selected.length };
 }
 
-function dismissQcIssues(filePaths) {
-    if (!Array.isArray(filePaths)) throw new Error('Select one or more QC findings to mark as not an issue.');
-    const targets = [...new Set(filePaths.map(value => String(value || '').trim()).filter(Boolean))].slice(0, 250);
+function dismissQcIssues(items) {
+    if (!Array.isArray(items)) throw new Error('Select QC findings and the specific issue types to dismiss.');
+    const targets = items.slice(0, 250);
     if (!targets.length) throw new Error('Select one or more QC findings to mark as not an issue.');
-    const find = qcDb.prepare('SELECT size, mtime FROM qc_cache WHERE path=? AND has_issues=1');
-    const save = qcDb.prepare(`INSERT INTO qc_dismissed(path,size,mtime,dismissed_at) VALUES(?,?,?,?)
-        ON CONFLICT(path) DO UPDATE SET size=excluded.size,mtime=excluded.mtime,dismissed_at=excluded.dismissed_at`);
+    const find = qcDb.prepare('SELECT size, mtime, issues FROM qc_cache WHERE path=? AND has_issues=1');
+    const save = qcDb.prepare(`INSERT INTO qc_dismissed_issues(path,issue,size,mtime,dismissed_at)
+        VALUES(?,?,?,?,?) ON CONFLICT(path,issue) DO UPDATE SET
+        size=excluded.size,mtime=excluded.mtime,dismissed_at=excluded.dismissed_at`);
     const now = new Date().toISOString();
-    let dismissed = 0;
-    let skipped = 0;
-    const run = qcDb.transaction(() => {
-        for (const target of targets) {
+    let dismissed = 0, skipped = 0;
+    qcDb.transaction(() => {
+        const seen = new Set();
+        for (const item of targets) {
+            const target = String(item?.path || '').trim();
+            const selected = [...new Set(Array.isArray(item?.issues) ? item.issues : [])];
+            if (!target || !selected.length) { skipped++; continue; }
             const row = find.get(target);
-            if (!row) { skipped++; continue; }
-            save.run(target, row.size, row.mtime, now);
-            dismissed++;
+            if (!row || Number(row.size) !== Number(item.size) || Number(row.mtime) !== Number(item.mtime)) { skipped++; continue; }
+            const current = new Set(JSON.parse(row.issues || '[]'));
+            for (const name of selected) {
+                const issue = String(name || '');
+                const key = `${target}\0${issue}`;
+                if (!current.has(issue) || seen.has(key)) { skipped++; continue; }
+                seen.add(key);
+                save.run(target, issue, row.size, row.mtime, now);
+                dismissed++;
+            }
         }
-    });
-    run();
+    })();
     return { success: true, requested: targets.length, dismissed, skipped };
 }
 
@@ -5567,7 +5657,7 @@ function getQcResults({ page = 0, limit = 50, search = '', series = '', issue = 
     const selectedIssue = String(issue || '').trim();
     const allowedIssues = new Set(['bad_name', 'unparsed_chapter', 'has_xml', 'bad_archive', 'unsupported_archive', 'unsupported_image_format', 'duplicate_chapter', 'special_needs_kavita_path', 'xml_cleanup_failed', 'move_failed']);
     const { destRoot } = getRoots();
-    const conditions = ['has_issues=1', `NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)`];
+    const conditions = [QC_VISIBLE_PREDICATE];
     const params = [];
     if (selectedSeries && destRoot) {
         const prefix = path.join(destRoot, selectedSeries, '');
@@ -5576,8 +5666,8 @@ function getQcResults({ page = 0, limit = 50, search = '', series = '', issue = 
         params.push(prefix, prefix);
     }
     if (allowedIssues.has(selectedIssue)) {
-        conditions.push('issues LIKE ?');
-        params.push(`%\"${selectedIssue}\"%`);
+        conditions.push(qcIssueIsVisibleSql('issue.value=?'));
+        params.push(selectedIssue);
     }
     if (term.length) {
         conditions.push('(pk_pattern_match(path, ?) = 1 OR pk_pattern_match(issues, ?) = 1 OR pk_pattern_match(reason, ?) = 1)');
@@ -5589,11 +5679,13 @@ function getQcResults({ page = 0, limit = 50, search = '', series = '', issue = 
 
     const safePage = pages > 0 ? Math.min(requestedPage, pages - 1) : 0;
     const offset = safePage * safeLimit;
-    const rows = qcDb.prepare(`SELECT path, issues, reason FROM qc_cache WHERE ${where} ORDER BY pk_natural_key(path) LIMIT ? OFFSET ?`)
+    const rows = qcDb.prepare(`SELECT path, size, mtime, issues, reason FROM qc_cache WHERE ${where} ORDER BY pk_natural_key(path) LIMIT ? OFFSET ?`)
         .all(...params, safeLimit, offset);
     const items = rows.map(row => {
         let issues = [];
         try { issues = JSON.parse(row.issues); } catch (_) {}
+        const allIssues = issues;
+        issues = filterDismissedQcIssues(row.path, row.size, row.mtime, issues);
         const seriesName = seriesNameFromPath(row.path, destRoot);
         let proposedName = null;
         let proposedPath = null;
@@ -5611,8 +5703,10 @@ function getQcResults({ page = 0, limit = 50, search = '', series = '', issue = 
             series: seriesName,
             file: path.basename(row.path),
             path: row.path,
+            size: row.size,
+            mtime: row.mtime,
             issues,
-            reason: row.reason || '',
+            reason: issues.length === allIssues.length ? (row.reason || '') : '',
             proposedName,
             proposedPath,
             renameCollision
@@ -5630,34 +5724,49 @@ function reconcileMissingConflicts(limit = 2000) {
     });
     if (!accessibleRoots.length) return { checked: 0, removed: 0, rootsAvailable: false };
 
-    let rows = db.prepare("SELECT id, source_path FROM pending_conflicts WHERE status='pending' AND id>? ORDER BY id LIMIT ?")
+    let rows = db.prepare("SELECT id, source_path, destination_path FROM pending_conflicts WHERE status='pending' AND id>? ORDER BY id LIMIT ?")
         .all(conflictReconcileCursor, safeLimit);
     if (!rows.length && conflictReconcileCursor) {
         conflictReconcileCursor = 0;
-        rows = db.prepare("SELECT id, source_path FROM pending_conflicts WHERE status='pending' ORDER BY id LIMIT ?").all(safeLimit);
+        rows = db.prepare("SELECT id, source_path, destination_path FROM pending_conflicts WHERE status='pending' ORDER BY id LIMIT ?").all(safeLimit);
     }
     if (rows.length) conflictReconcileCursor = rows[rows.length - 1].id;
-    const update = db.prepare("UPDATE pending_conflicts SET status='resolved', resolution='source_missing', updated_at=? WHERE id=? AND status='pending'");
+    const update = db.prepare("UPDATE pending_conflicts SET status='resolved', resolution=?, updated_at=? WHERE id=? AND status='pending'");
     const now = new Date().toISOString();
     let removed = 0;
     const removedIds = [];
+    const verifiedPresence = candidate => {
+        if (!candidate || !accessibleRoots.some(root => isWithin(root, candidate) && !samePath(root, candidate))) return null;
+        try { return fs.statSync(candidate).isFile(); }
+        catch (error) { return ['ENOENT', 'ENOTDIR'].includes(error.code) ? false : null; }
+    };
     for (const row of rows) {
         const sourcePath = path.resolve(row.source_path);
-        if (!accessibleRoots.some(root => isWithin(root, sourcePath) && !samePath(root, sourcePath))) continue;
-        let missing = false;
-        try { fs.statSync(sourcePath); }
-        catch (error) {
-            if (error.code === 'ENOENT' || error.code === 'ENOTDIR') missing = true;
+        const destinationPath = path.resolve(row.destination_path);
+        const sourcePresent = verifiedPresence(sourcePath);
+        const destinationPresent = verifiedPresence(destinationPath);
 
-        }
-        if (missing) {
-            const changes = update.run(now, row.id).changes;
+        const reason = sourcePresent === false ? 'source_missing'
+            : sourcePresent === true && destinationPresent === false ? 'destination_missing' : null;
+        if (reason) {
+            const changes = update.run(reason, now, row.id).changes;
             removed += changes;
             if (changes) removedIds.push(row.id);
         }
     }
-    if (removed) log(`[CONFLICT CLEANUP] Automatically retired ${removed} stale conflict record(s) because their source files no longer exist. No files were deleted.`, 'INFO');
+    if (removed) {
+        log(`[CONFLICT CLEANUP] Retired ${removed} stale comparison(s) with a confirmed missing side. Remaining files were not changed.`, 'INFO');
+    }
     return { checked: rows.length, removed, removedIds, rootsAvailable: true };
+}
+
+function getConflictSourceLocation(conflict) {
+    const { sourceRoot, destRoot } = getRoots();
+    const source = conflict?.source_path;
+    if (!source) return 'unknown';
+    if (destRoot && isWithin(destRoot, source) && !samePath(destRoot, source)) return 'library';
+    if (sourceRoot && isWithin(sourceRoot, source) && !samePath(sourceRoot, source)) return 'downloads';
+    return 'unknown';
 }
 
 function removeStaleConflict(id) {
@@ -5695,6 +5804,9 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
 
     const allowNames = !automaticQcActions || automaticQcActions.repairNames;
     const allowSpecials = !automaticQcActions || automaticQcActions.organizeSpecials;
+
+    const skipGlobalIgnoreLibraryRenames = Boolean(automaticQcActions && !automaticQcActions.applyGlobalIgnoresToLibrary);
+    const qcRenameTerms = series => skipGlobalIgnoreLibraryRenames ? getSeriesIgnoredTerms(series) : null;
     const allowComicInfo = !automaticQcActions || automaticQcActions.applyComicInfo;
     const allowReview = !automaticQcActions || automaticQcActions.routeToReview;
     const allowUnsupportedImageReview = !automaticQcActions || automaticQcActions.routeUnsupportedImages;
@@ -5729,7 +5841,7 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
         beginQcMutation();
         try {
             if (allowSpecials && allowCopyNameNormalization && remainingIssues.has('special_needs_kavita_path')) {
-                const special = parseQcChapterPath(currentPath, series);
+                const special = parseQcChapterPath(currentPath, series, qcRenameTerms(series));
                 if (!special?.special) {
                     remainingIssues.delete('special_needs_kavita_path');
                 } else {
@@ -5766,7 +5878,7 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
 
             if (allowNames && allowCopyNameNormalization && (allowSpecials || !remainingIssues.has('special_needs_kavita_path'))
                 && (remainingIssues.has('bad_name') || remainingIssues.has('unparsed_chapter'))) {
-                const chapter = parseQcChapterPath(currentPath, series);
+                const chapter = parseQcChapterPath(currentPath, series, qcRenameTerms(series));
                 if (chapter) {
                     const newPath = path.join(path.dirname(currentPath), `${series} - ${chapter.label}.cbz`);
                     const capitalizationChange = currentPath !== newPath && currentPath.toLocaleLowerCase() === newPath.toLocaleLowerCase();
@@ -5798,9 +5910,16 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
                         resolveFileIssue(currentPath);
                         fixed++;
                     } else {
-                        remainingIssues.delete('bad_name');
-                        remainingIssues.delete('unparsed_chapter');
-                        resolveFileIssue(currentPath);
+
+                        const stem = path.basename(currentPath).replace(/\.cbz$/i, '')
+                            .replace(new RegExp(String(series).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), ' ');
+                        const globalOnlyFinding = skipGlobalIgnoreLibraryRenames
+                            && hasIgnoredChapterTerms(stem, getGlobalIgnoredTerms());
+                        if (!globalOnlyFinding) {
+                            remainingIssues.delete('bad_name');
+                            remainingIssues.delete('unparsed_chapter');
+                            resolveFileIssue(currentPath);
+                        }
                     }
                 } else if (allowReview) {
                     const currentStats = await fs.stat(currentPath);
@@ -5846,7 +5965,7 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
             }
 
             if (allowReview && remainingIssues.has('duplicate_chapter')) {
-                const chapter = parseQcChapterPath(currentPath, series);
+                const chapter = parseQcChapterPath(currentPath, series, qcRenameTerms(series));
                 const collision = chapter ? await findChapterCollision(path.resolve(destRoot, series), series, chapter, currentPath) : null;
                 if (collision) {
                     const conflictId = savePendingConflict(currentPath, collision, series, chapter,
@@ -5855,6 +5974,22 @@ async function fixLibraryIssues(fileList, { automaticQcActions = null } = {}) {
                     log(`[QC → CONFLICT #${conflictId}] Transferred ${path.basename(currentPath)} to Chapter Conflicts.`, 'WARN');
                 }
                 remainingIssues.delete('duplicate_chapter');
+            }
+
+            if (automaticQcActions?.convertJxl && remainingIssues.has('unsupported_image_format') &&
+                String(getSetting('autoQC','false')) === 'true') {
+                try {
+                    const conversion = await convertJxlArchive(currentPath, { alreadyLeased: true });
+                    if (conversion.changed) {
+                        fixed++;
+                        const stillUnsupported = unsupportedImagesInDirectory(await zip.readZipDirectory(currentPath));
+                        if (!stillUnsupported.length) remainingIssues.delete('unsupported_image_format');
+                        else reason = describeUnsupportedImages(stillUnsupported);
+                    }
+                } catch (error) {
+                    reason = `JXL conversion failed: ${error.message}. ${reason}`;
+                    log(`[QC JXL CONVERSION FAILED] ${path.basename(currentPath)}: ${error.message}`, 'WARN');
+                }
             }
 
             const reviewKinds = [
@@ -6014,7 +6149,81 @@ async function setManualChaptersForIssues(items) {
     return { success: failed.length === 0, completed, failed, pipelineStarted: Boolean(needsPipeline && completed), message: `${completed} chapter label(s) applied.${needsPipeline && completed ? ' Processing started once for the entire batch.' : ''}` };
 }
 
-async function createRecoverySnapshotForPath(originalPath, series) {
+const activeJxlConversions = new Set();
+async function convertJxlArchive(filePath, { issue = null, alreadyLeased = false } = {}) {
+    const fullPath = path.resolve(String(filePath || ''));
+    const { sourceRoot, destRoot } = getRoots();
+    const allowed = [sourceRoot, destRoot].filter(Boolean).some(root => isWithin(root, fullPath) && !samePath(root, fullPath));
+    if (!allowed || path.extname(fullPath).toLowerCase() !== '.cbz' ||
+        (destRoot && isWithin(path.join(destRoot, '.panelkeeper-recovery'), fullPath))) {
+        throw new Error('Conversion is only allowed for CBZ files inside the configured Downloads or Library folders.');
+    }
+    if (activeJxlConversions.has(pathKey(fullPath))) throw new Error('This CBZ is already being converted.');
+    if (!alreadyLeased) {
+        await yieldToPipeline();
+        await waitForCoverMutations();
+        beginQcMutation();
+    }
+    if (activeJxlConversions.has(pathKey(fullPath))) {
+        if (!alreadyLeased) endQcMutation();
+        throw new Error('This CBZ is already being converted.');
+    }
+    activeJxlConversions.add(pathKey(fullPath));
+    try {
+        const stat = await fs.lstat(fullPath);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Only ordinary CBZ files can be converted.');
+        const series = issue?.target_series || (destRoot && isWithin(destRoot,fullPath) ? seriesNameFromPath(fullPath,destRoot) : '') || 'Unsorted';
+        const result = await zip.convertJxlPagesInPlace(fullPath, {
+            beforeCommit: () => createRecoverySnapshotForPath(fullPath,series,'jxl-conversion'),
+            onStart: ({ total }) => log(`[JXL CONVERSION START] ${path.basename(fullPath)}: converting ${total} JXL page(s); the original will be saved to Recovery before replacement.`),
+            onProgress: ({ done, total }) => {
+                if (done % 10 === 0 && done < total) {
+                    log(`[JXL CONVERSION PROGRESS] ${path.basename(fullPath)}: ${done}/${total} JXL pages encoded.`);
+                }
+            }
+        });
+        if (!result.changed) return { success: true, ...result, message: 'No JXL pages were found. No files were changed.' };
+
+        const stats = await fs.stat(fullPath);
+        const remaining = unsupportedImagesInDirectory(await zip.readZipDirectory(fullPath));
+
+        if (destRoot && isWithin(destRoot,fullPath)) await inspectPipelineQcArchive(fullPath);
+        else qcDb.prepare('DELETE FROM qc_cache WHERE path=?').run(fullPath);
+        db.prepare('DELETE FROM processed_files WHERE path=?').run(fullPath);
+        const pendingFormatIssue = issue?.kind === 'unsupported_image_format' ? issue
+            : db.prepare("SELECT * FROM file_issues WHERE path=? AND kind='unsupported_image_format' AND status='pending'").get(fullPath);
+        if (pendingFormatIssue) {
+            const issueId = pendingFormatIssue.id;
+            if (remaining.length) {
+                db.prepare('UPDATE file_issues SET size=?, mtime=?, updated_at=?, reason=? WHERE id=? AND status=\'pending\'')
+                    .run(stats.size,Math.floor(stats.mtimeMs),new Date().toISOString(),describeUnsupportedImages(remaining),issueId);
+            } else {
+                db.prepare('UPDATE file_issues SET status=\'resolved\', size=?, mtime=?, updated_at=?, reason=? WHERE id=? AND status=\'pending\'')
+                    .run(stats.size,Math.floor(stats.mtimeMs),new Date().toISOString(),'Converted all JXL pages to compatible lossless images.',issueId);
+            }
+        }
+        if (destRoot && isWithin(destRoot,fullPath)) {
+            await scanLibrarySeriesDirectory(series).catch(error => log(`[JXL CONVERSION] Inventory refresh failed: ${error.message}`, 'WARN'));
+        }
+        log(`[JXL CONVERSION] ${path.basename(fullPath)}: ${result.converted} JXL page(s) → ${result.webp} lossless WebP, ${result.png} lossless PNG; original in Recovery #${result.recoveryId}.`);
+        return {
+            success: true, ...result, remainingUnsupported: remaining.length,
+            message: `Converted ${result.converted} JXL page(s) (${result.webp} WebP, ${result.png} PNG). Original saved to Recovery #${result.recoveryId}.${remaining.length ? ` ${remaining.length} other unsupported page(s) still require attention.` : ''}`
+        };
+    } finally {
+        activeJxlConversions.delete(pathKey(fullPath));
+        if (!alreadyLeased) endQcMutation();
+    }
+}
+
+async function convertJxlAttentionIssue(issueId) {
+    const issue = db.prepare("SELECT * FROM file_issues WHERE id=? AND status='pending'").get(Number(issueId));
+    if (!issue) throw new Error('Pending Attention item not found.');
+    if (issue.kind !== 'unsupported_image_format') throw new Error('This Attention record is not an unsupported-image finding.');
+    return convertJxlArchive(issue.path, { issue });
+}
+
+async function createRecoverySnapshotForPath(originalPath, series, reason = 'page-edit') {
     const stats = await fs.stat(originalPath);
     const { destRoot } = getRoots();
     const date = new Date();
@@ -6023,7 +6232,7 @@ async function createRecoverySnapshotForPath(originalPath, series) {
     const recoveryRoot = path.join(path.resolve(destRoot), '.panelkeeper-recovery', day, safeSeries);
     await fs.ensureDir(recoveryRoot);
     const stamp = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    const backupPath = path.join(recoveryRoot, `${stamp}-before-page-edit-${path.basename(originalPath)}`);
+    const backupPath = path.join(recoveryRoot, `${stamp}-before-${reason}-${path.basename(originalPath)}`);
     await fs.copyFile(originalPath, backupPath);
     const now = new Date().toISOString();
     try {
@@ -6076,7 +6285,13 @@ async function resolveConflictInternal(id, action) {
     const conflictDestination = buildChapterDestination(targetDir, conflict.target_series, conflictChapter);
     const canonicalPath = conflictDestination.path;
     if (!isWithin(destRoot, targetDir) || !isWithin(destRoot, canonicalPath)) throw new Error('Conflict has an invalid target path; no files were changed.');
-    if (!(await fs.pathExists(sourcePath))) throw new Error('The downloaded/source file no longer exists. Refresh the queue before resolving it.');
+    if (getPathPresence(sourcePath) !== true) throw new Error('The conflict source is unavailable. Refresh the queue before resolving it.');
+    if (['use_download', 'keep_library'].includes(action) && (samePath(sourcePath, existingPath) || getPathPresence(existingPath) !== true)) {
+        throw new Error('The other library copy is no longer available. Refresh Conflicts; the remaining file will not be deleted.');
+    }
+    if (['use_download', 'keep_library'].includes(action) && (!isWithin(destRoot, existingPath) || samePath(destRoot, existingPath))) {
+        throw new Error('The comparison library path is outside the configured library. No files were changed.');
+    }
     if (action === 'send_to_attention') {
         const allowed = [sourceRoot, destRoot].filter(Boolean).some(root => isWithin(root, sourcePath) && !samePath(root, sourcePath));
         if (!allowed || path.extname(sourcePath).toLowerCase() !== '.cbz') throw new Error('The conflict source is outside the configured CBZ locations. It was not transferred.');
@@ -6092,12 +6307,7 @@ async function resolveConflictInternal(id, action) {
     }
     if (action === 'use_download') {
 
-        if (samePath(sourcePath, canonicalPath)) {
-            db.prepare("UPDATE pending_conflicts SET status='resolved', resolution='already_canonical', updated_at=? WHERE id=?")
-                .run(new Date().toISOString(), conflict.id);
-            log(`[CONFLICT #${id}] ${path.basename(sourcePath)} is already at its canonical library destination; closed the conflict without moving or deleting either file.`);
-            return { success: true, message: 'The downloaded file is already at its canonical library destination. The conflict was closed without moving, replacing, or deleting either file.' };
-        }
+        const alreadyCanonical = samePath(sourcePath, canonicalPath);
         await fs.ensureDir(conflictDestination.directory);
         const recoveryItems = [];
         const currentTargets = new Set([existingPath, canonicalPath]);
@@ -6106,7 +6316,7 @@ async function resolveConflictInternal(id, action) {
                 if (samePath(target, sourcePath) || !(await fs.pathExists(target))) continue;
                 recoveryItems.push(await createRecoveryForPath(target, conflict.target_series));
             }
-            await fs.move(sourcePath, canonicalPath, { overwrite: false });
+            if (!alreadyCanonical) await fs.move(sourcePath, canonicalPath, { overwrite: false });
         } catch (error) {
 
             for (const recovered of recoveryItems.reverse()) {
@@ -6119,15 +6329,39 @@ async function resolveConflictInternal(id, action) {
         }
         db.prepare("UPDATE pending_conflicts SET status='resolved', resolution='used_download', updated_at=? WHERE id=?")
             .run(new Date().toISOString(), conflict.id);
+
+        for (const displaced of currentTargets) {
+            if (!samePath(displaced, sourcePath)) resolveFileIssue(displaced);
+        }
         db.prepare('DELETE FROM chapter_overrides WHERE path=?').run(sourcePath);
         db.prepare('DELETE FROM processed_files WHERE path=?').run(sourcePath);
         db.prepare('UPDATE cover_insertions SET archive_path=? WHERE archive_path=?').run(path.resolve(canonicalPath), sourcePath);
-        resolveFileIssue(sourcePath);
+        const pendingIssue = db.prepare("SELECT * FROM file_issues WHERE path=? AND status='pending'").get(sourcePath);
+        if (pendingIssue && ['unsupported_image_format', 'bad_archive', 'unsupported_archive', 'xml_cleanup_failed'].includes(pendingIssue.kind)) {
+            if (!alreadyCanonical) {
+
+                const existingIssue = db.prepare('SELECT id FROM file_issues WHERE path=?').get(path.resolve(canonicalPath));
+                if (existingIssue && existingIssue.id !== pendingIssue.id) {
+                    db.prepare(`UPDATE file_issues SET kind=?, reason=?, target_series=?, size=?, mtime=?,
+                        status='pending', updated_at=? WHERE id=?`)
+                        .run(pendingIssue.kind, pendingIssue.reason, pendingIssue.target_series, pendingIssue.size,
+                            pendingIssue.mtime, new Date().toISOString(), existingIssue.id);
+                    db.prepare("UPDATE file_issues SET status='resolved', updated_at=? WHERE id=?")
+                        .run(new Date().toISOString(), pendingIssue.id);
+                } else {
+                    db.prepare('UPDATE file_issues SET path=?, updated_at=? WHERE id=?')
+                        .run(path.resolve(canonicalPath), new Date().toISOString(), pendingIssue.id);
+                }
+            }
+        } else {
+            resolveFileIssue(sourcePath);
+        }
 
         qcDb.prepare('DELETE FROM qc_cache WHERE path IN (?, ?, ?)').run(sourcePath, existingPath, path.resolve(canonicalPath));
         await applyCoverRuleToFile(canonicalPath, conflict.target_series).catch(error => log(`[COVER APPLY WARN] ${path.basename(canonicalPath)}: ${error.message}`, 'WARN'));
-        log(`[CONFLICT #${id}] Used the downloaded version for ${conflict.target_series} - ${conflict.chapter_label}. Previous library version moved to Recovery.`);
-        return { success: true, message: 'Downloaded version is now in the library. The previous library version is in Recovery.' };
+        const winnerLocation = getConflictSourceLocation(conflict);
+        log(`[CONFLICT #${id}] Kept chosen ${winnerLocation === 'library' ? 'library' : 'download'} copy for ${conflict.target_series} - ${conflict.chapter_label}. Other library copy moved to Recovery.`);
+        return { success: true, acceptedPath: canonicalPath, message: 'The chosen chapter is in the library. The other library copy is in Recovery.' };
     }
 
     if (action === 'keep_library') {
@@ -6147,26 +6381,42 @@ async function resolveConflictInternal(id, action) {
         db.prepare('DELETE FROM processed_files WHERE path=?').run(sourcePath);
         clearQcIssueFlag(existingPath, 'duplicate_chapter');
         resolveFileIssue(sourcePath);
-        log(`[CONFLICT #${id}] Kept the existing library copy and removed/archived the incoming duplicate.`);
-        return { success: true, message: 'The library version was kept. The duplicate was removed from Downloads or moved to Recovery.' };
+        log(`[CONFLICT #${id}] Kept ${path.basename(existingPath)} and moved the other copy into Recovery.`);
+        return { success: true, acceptedPath: existingPath, message: 'The chosen library copy was kept. The other copy is in Recovery.' };
     }
     throw new Error('Unknown conflict resolution.');
 }
 
 async function resolveConflict(id, action) {
 
-    const conflict = db.prepare("SELECT target_series FROM pending_conflicts WHERE id=? AND status='pending'").get(Number(id));
+    const conflict = db.prepare("SELECT target_series, source_path FROM pending_conflicts WHERE id=? AND status='pending'").get(Number(id));
+
+    const { sourceRoot } = getRoots();
+    const originatedInDownloads = Boolean(conflict?.source_path && sourceRoot
+        && isWithin(sourceRoot, path.resolve(conflict.source_path))
+        && !samePath(sourceRoot, conflict.source_path));
     await yieldToPipeline();
     beginQcMutation();
+    let acceptedPath = '';
     try {
         const result = await resolveConflictInternal(id, action);
+        if (['use_download', 'keep_library'].includes(action) && result.acceptedPath) {
+            acceptedPath = result.acceptedPath;
+            delete result.acceptedPath;
+        }
+
+        reconcileMissingConflicts(10000);
         if (conflict?.target_series && db.prepare('SELECT 1 FROM library_series_state WHERE lower(series)=lower(?)').get(conflict.target_series)) {
             await waitForLibrarySeriesScan(conflict.target_series);
             await scanLibrarySeriesDirectory(conflict.target_series).catch(error => log(`[LIBRARY INVENTORY] Refresh failed for ${conflict.target_series}: ${error.message}`, 'WARN'));
         }
         return result;
     } finally {
+
         endQcMutation();
+        if (acceptedPath && originatedInDownloads && queuePipelineQcWorker({ conflictPath: acceptedPath })) {
+            log(`[CONFLICT #${id}] Queued post-conflict Automatic QC for incoming chapter ${path.basename(acceptedPath)}.`);
+        }
     }
 }
 
@@ -6538,18 +6788,27 @@ async function inspectPipelineQcArchive(filePath) {
         .run(absolute,stats.size,Math.floor(stats.mtimeMs),JSON.stringify(issues),reason,issues.length?1:0,new Date().toISOString(),QC_ANALYSIS_VERSION);
     const dismissed = qcDb.prepare('SELECT 1 FROM qc_dismissed WHERE path=? AND size=? AND mtime=?')
         .get(absolute,stats.size,Math.floor(stats.mtimeMs));
-    return dismissed ? null : {series,file:name,path:absolute,issues,reason};
+    const visibleIssues = dismissed ? [] : filterDismissedQcIssues(absolute, stats.size, Math.floor(stats.mtimeMs), issues);
+    return visibleIssues.length ? {series,file:name,path:absolute,issues:visibleIssues,reason} : null;
 }
 
 async function runPipelineQcWorker() {
     if (pipelineQcWorkerRunning) return;
     pipelineQcWorkerRunning = true;
     let scanned = 0, repaired = 0, routed = 0;
+    let includedPipelinePass = false;
     try {
         while (pipelineQcWorkerRequested && String(getSetting('autoQC','false')) === 'true') {
             pipelineQcWorkerRequested = false;
-            const candidates = [...pipelineQcCandidates];
+            const includeExistingFindings = pipelineQcExistingFindingsRequested;
+            pipelineQcExistingFindingsRequested = false;
+            includedPipelinePass ||= includeExistingFindings;
+            const candidates = [...new Set([...pipelineQcCandidates, ...conflictQcCandidates])];
             pipelineQcCandidates.clear();
+            conflictQcCandidates.clear();
+            if (candidates.length && !includeExistingFindings) {
+                log(`[CONFLICT QC START] Checking ${candidates.length} accepted chapter(s) with the enabled Automatic QC actions.`);
+            }
             const handled = new Set();
             const duplicateDirs = new Set();
             const pending = [];
@@ -6574,6 +6833,22 @@ async function runPipelineQcWorker() {
                 const resolved = path.resolve(target);
                 if (handled.has(resolved)) return;
                 handled.add(resolved);
+
+                const actions = getAutomaticQcActions(getSetting);
+                if (actions.convertJxl) {
+                    const review = db.prepare("SELECT id FROM file_issues WHERE path=? AND status='pending' AND kind='unsupported_image_format'").get(resolved);
+                    if (review) {
+                        try {
+                            const directory = await zip.readZipDirectory(resolved);
+                            if (unsupportedImagesInDirectory(directory).some(page => page.extension === '.jxl')) {
+                                const conversion = await convertJxlArchive(resolved);
+                                if (conversion.changed) repaired++;
+                            }
+                        } catch (error) {
+                            log(`[CONFLICT QC JXL] Could not convert ${path.basename(resolved)}: ${error.message}`, 'WARN');
+                        }
+                    }
+                }
                 const item = await inspectPipelineQcArchive(resolved);
                 if (!item) return;
                 scanned++;
@@ -6583,28 +6858,30 @@ async function runPipelineQcWorker() {
             };
 
             for (const target of candidates) await inspect(target);
-            let cursor = '';
-            const select = qcDb.prepare(`SELECT path,issues FROM qc_cache WHERE has_issues=1 AND path>?
-                AND NOT EXISTS (SELECT 1 FROM qc_dismissed d WHERE d.path=qc_cache.path AND d.size=qc_cache.size AND d.mtime=qc_cache.mtime)
-                ORDER BY path LIMIT 100`);
-            while (String(getSetting('autoQC','false')) === 'true') {
-                await yieldToPipeline();
-                const rows = select.all(cursor);
-                if (!rows.length) break;
-                for (const row of rows) {
-                    cursor = row.path;
-                    let existingIssues = [];
-                    try { existingIssues = JSON.parse(row.issues); } catch (_) {}
-                    const actions = getAutomaticQcActions(getSetting);
-                    if (existingIssues.includes('duplicate_chapter') && actions.resolveDuplicates) {
-                        duplicateDirs.add(path.dirname(row.path));
+
+            if (includeExistingFindings) {
+                let cursor = '';
+                const select = qcDb.prepare(`SELECT path,size,mtime,issues FROM qc_cache WHERE ${QC_VISIBLE_PREDICATE} AND path>?
+                    ORDER BY path LIMIT 100`);
+                while (String(getSetting('autoQC','false')) === 'true') {
+                    await yieldToPipeline();
+                    const rows = select.all(cursor);
+                    if (!rows.length) break;
+                    for (const row of rows) {
+                        cursor = row.path;
+                        let existingIssues = [];
+                        try { existingIssues = filterDismissedQcIssues(row.path, row.size, row.mtime, JSON.parse(row.issues)); } catch (_) {}
+                        const actions = getAutomaticQcActions(getSetting);
+                        if (existingIssues.includes('duplicate_chapter') && actions.resolveDuplicates) {
+                            duplicateDirs.add(path.dirname(row.path));
+                        }
+                        if (handled.has(path.resolve(row.path))) continue;
+                        if (!hasAutomaticQcActionableIssue(existingIssues, actions, getComicInfoPolicy(seriesNameFromPath(row.path,getRoots().destRoot)))) continue;
+                        await inspect(row.path);
                     }
-                    if (handled.has(path.resolve(row.path))) continue;
-                    if (!hasAutomaticQcActionableIssue(existingIssues, actions, getComicInfoPolicy(seriesNameFromPath(row.path,getRoots().destRoot)))) continue;
-                    await inspect(row.path);
+                    await flush();
+                    await new Promise(resolve => setImmediate(resolve));
                 }
-                await flush();
-                await new Promise(resolve => setImmediate(resolve));
             }
             await flush();
             if (getAutomaticQcActions(getSetting).resolveDuplicates) {
@@ -6612,34 +6889,49 @@ async function runPipelineQcWorker() {
                     await yieldToPipeline();
                     if (String(getSetting('autoQC','false')) !== 'true') break;
                     try {
-                        const result = await collectDirectoryDuplicateGroups(directory,getRoots().destRoot,pipelineGeneration);
+                        const result = await collectDirectoryDuplicateGroups(directory,getRoots().destRoot,pipelineGeneration,
+                            { useGlobalIgnoredTerms: getAutomaticQcActions(getSetting).applyGlobalIgnoresToLibrary });
                         if (result.interrupted) continue;
                         const actions = getAutomaticQcActions(getSetting);
                         if (!actions.resolveDuplicates) break;
                         await processDirectoryDuplicateGroups(result.groups,{
-                            generationAtStart:pipelineGeneration,allowRenames:actions.repairNames,allowReviewRouting:actions.routeToReview
+                            generationAtStart:pipelineGeneration,allowRenames:actions.repairNames,
+                            allowReviewRouting:actions.routeToReview, applyGlobalIgnoresToLibrary:actions.applyGlobalIgnoresToLibrary
                         });
                     } catch (error) { log(`[PIPELINE QC DUPLICATES] ${directory}: ${error.message}`, 'WARN'); }
                     await new Promise(resolve => setImmediate(resolve));
                 }
             }
         }
-        if (scanned || repaired || routed) log(`[PIPELINE QC] Checked ${scanned} changed or previously flagged chapter(s), applied ${repaired} repair(s), routed ${routed} review item(s). No full-library scan was started.`);
+        if (scanned || repaired || routed) {
+            log(`[${includedPipelinePass ? 'PIPELINE QC' : 'CONFLICT QC'}] Checked ${scanned} chapter(s), applied ${repaired} repair(s), routed ${routed} review item(s). No full-library scan was started.`);
+        }
     } catch (error) {
-        log(`[PIPELINE QC] Automatic pass could not complete: ${error.stack || error.message}`, 'ERROR');
+        log(`[AUTOMATIC QC] Pass could not complete: ${error.stack || error.message}`, 'ERROR');
     } finally {
         pipelineQcWorkerRunning = false;
         if (pipelineQcWorkerRequested) setImmediate(runPipelineQcWorker);
     }
 }
 
-function queuePipelineQcWorker() {
+function queuePipelineQcWorker({ conflictPath = '' } = {}) {
     if (String(getSetting('autoQC','false')) !== 'true') {
         pipelineQcCandidates.clear();
-        return;
+        conflictQcCandidates.clear();
+        pipelineQcExistingFindingsRequested = false;
+        return false;
+    }
+    if (conflictPath) {
+        const resolved = path.resolve(conflictPath);
+        const { destRoot } = getRoots();
+        if (!destRoot || !isWithin(destRoot,resolved) || path.extname(resolved).toLowerCase() !== '.cbz') return false;
+        conflictQcCandidates.add(resolved);
+    } else {
+        pipelineQcExistingFindingsRequested = true;
     }
     pipelineQcWorkerRequested = true;
     if (!pipelineQcWorkerRunning) setImmediate(runPipelineQcWorker);
+    return true;
 }
 
 async function runPipeline() {
@@ -6726,6 +7018,7 @@ module.exports = {
     previewIssueProposal,
     reconcileQueuedChapterItems,
     getConflictProposal,
+    getConflictSourceLocation,
     getQcSeriesFilters,
     getIssueSeriesFilters,
     getSeriesPendingCounts,
@@ -6737,6 +7030,7 @@ module.exports = {
     setManualChapterForIssue,
     setManualChaptersForIssues,
     deleteFileIssue,
+    convertJxlAttentionIssue,
     getIssueArchivePages,
     getIssueArchivePage,
     deleteIssueArchivePage,
