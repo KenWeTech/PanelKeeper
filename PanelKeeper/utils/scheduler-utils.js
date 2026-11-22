@@ -164,12 +164,8 @@ function describeCronSchedule(expression) {
                     const expectedCount = Math.ceil((24 - startHour) / step);
                     const uniform = hours.every((hour, index) => hour === startHour + index * step);
                     if (step > 0 && uniform && hours.length === expectedCount && 24 % step === 0) {
-                        if (hours.includes(0)) {
-                            return minute
-                                ? `Every ${step} hours at :${String(minute).padStart(2, '0')} (avoids midnight)`
-                                : `Every ${step} hours`;
-                        }
-                        return `Every ${step} hours starting at ${clock(startHour)} (avoids midnight)`;
+
+                        return `Every ${step} hours`;
                     }
                 }
                 if (hours.length === 1) {
