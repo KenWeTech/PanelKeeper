@@ -4448,6 +4448,41 @@ ${result.sentToConflicts || 0} item(s) transferred to Chapter Conflicts.`, 'QC r
             }
         }
 
+        async function saveKavitaConnection() {
+            const button = $('kavitaSaveConnectionButton');
+            const status = $('kavitaConnectionStatus');
+            const baseUrl = $('kavitaBaseUrl').value.trim();
+            const apiKey = $('kavitaApiKey').value.trim();
+            if (button.disabled) return;
+            if (!baseUrl) {
+                status.textContent = 'Enter the Kavita server URL before saving.';
+                $('kavitaBaseUrl').focus();
+                return;
+            }
+            button.disabled = true;
+            status.textContent = 'Testing Kavita connection…';
+            try {
+
+                const result = await postJSON('/api/covers/kavita/connection', { baseUrl, apiKey });
+                const connection = result.connection || {};
+                $('kavitaBaseUrl').value = connection.baseUrl || baseUrl;
+                $('kavitaApiKey').value = '';
+                status.textContent = `Connected to ${connection.baseUrl || baseUrl}. Auth Key is saved on the server.`;
+
+                kavitaCoverConnectionConfigured = Boolean(connection.configured);
+                const series = $('coverSeriesSelect').value;
+                if (series) {
+                    try { await loadKavitaCoverSettings(series); }
+                    catch (refreshError) { console.warn('Could not refresh Kavita cover controls:', refreshError.message); }
+                }
+            } catch (error) {
+
+                status.textContent = `Could not save Kavita connection: ${error.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
         async function loadKavitaConnectionSettings() {
             try {
                 const connection = await api('/api/covers/kavita/connection');
