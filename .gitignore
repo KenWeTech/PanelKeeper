@@ -1,0 +1,8 @@
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+manager_history.log
+manager_history.log.1
+.panelkeeper-recovery/
+.history/
